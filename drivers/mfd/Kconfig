@@ -452,16 +452,6 @@ config MFD_PM8XXX_DEBUG
 	  arbitrary addresses.  Writes are blocking so values are guaranteed to
 	  be set into hardware registers upon return.
 
-config MFD_PM8XXX_IRQ
-	bool "Qualcomm PM8xxx IRQ features"
-	depends on MFD_PM8XXX
-	default y if MFD_PM8XXX
-	help
-	  This is the IRQ driver for Qualcomm PM 8xxx PMIC chips.
-
-	  This is required to use certain other PM 8xxx features, such as GPIO
-	  and MPP.
-
 config MFD_PM8XXX_MISC
 	tristate "Support for Qualcomm PM8xxx miscellaneous APIs"
 	depends on MFD_PM8XXX
