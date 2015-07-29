@@ -23,7 +23,6 @@
 #include <linux/spi/spi.h>
 #endif
 #include <linux/msm_ssbi.h>
-#include <linux/mfd/pmic8058.h>
 #include <linux/mfd/marimba.h>
 #include <linux/i2c.h>
 #include <linux/input.h>
@@ -57,6 +56,8 @@
 #include <mach/rpc_server_handset.h>
 #include <mach/socinfo.h>
 #include <mach/msm_memtypes.h>
+#include <linux/irqchip.h>
+#include <linux/mfd/pm8xxx/gpio.h>
 
 #include <asm/mach/mmc.h>
 #include <asm/mach/flash.h>
@@ -79,7 +80,6 @@
 #include <linux/msm_ion.h>
 #endif
 
-#include "board-semc7x30-regulator.h"
 #include "pm.h"
 
 #include "gpio-semc.h"
@@ -247,6 +247,11 @@ static struct platform_device ion_dev;
 #define PM8058_GPIO_SYS_TO_PM(sys_gpio)    (sys_gpio - NR_GPIO_IRQS)
 #define PM8058_MPP_BASE			   PM8058_GPIO_PM_TO_SYS(PM8058_GPIOS)
 #define PM8058_MPP_PM_TO_SYS(pm_gpio)	   (pm_gpio + PM8058_MPP_BASE)
+
+
+#define PM8058_IRQ_BLOCK_BIT(block, bit) ((block) * 8 + (bit))
+#define PM8058_GPIO_IRQ(base, gpio)	((base) + \
+					PM8058_IRQ_BLOCK_BIT(24, (gpio)))
 
 #define DDR0_BANK_BASE PHYS_OFFSET
 #define DDR0_BANK_SIZE 0X03C00000
@@ -495,61 +500,6 @@ static int pm8058_gpios_init(void)
 
 	return 0;
 }
-
-/* Regulator API support */
-
-#ifdef CONFIG_MSM_PROC_COMM_REGULATOR
-static struct platform_device msm_proccomm_regulator_dev = {
-	.name = PROCCOMM_REGULATOR_DEV_NAME,
-	.id   = -1,
-	.dev  = {
-		.platform_data = &msm7x30_proccomm_regulator_data
-	}
-};
-#endif
-
-static struct pm8xxx_irq_platform_data pm8xxx_irq_pdata = {
-	.irq_base		= PMIC8058_IRQ_BASE,
-	.devirq			= MSM_GPIO_TO_INT(PMIC_GPIO_INT),
-	.irq_trigger_flag       = IRQF_TRIGGER_LOW,
-};
-
-static struct pm8xxx_gpio_platform_data pm8xxx_gpio_pdata = {
-	.gpio_base		= PM8058_GPIO_PM_TO_SYS(0),
-};
-
-static struct pm8xxx_mpp_platform_data pm8xxx_mpp_pdata = {
-	.mpp_base	= PM8058_MPP_PM_TO_SYS(0),
-};
-
-static struct pm8xxx_vibrator_platform_data pm8xxx_vibrator_pdata = {
-	.initial_vibrate_ms	= 0,
-	.level_mV		= CONFIG_PMIC8XXX_VIBRATOR_VOLTAGE,
-	.max_timeout_ms		= 15000,
-};
-
-static struct pm8xxx_misc_platform_data pm8xxx_misc_pdata = {
-	.priority		= 0,
-};
-
-static struct pm8058_platform_data pm8058_7x30_data = {
-	.irq_pdata		= &pm8xxx_irq_pdata,
-	.gpio_pdata		= &pm8xxx_gpio_pdata,
-	.mpp_pdata		= &pm8xxx_mpp_pdata,
-	.vibrator_pdata		= &pm8xxx_vibrator_pdata,
-	.misc_pdata		= &pm8xxx_misc_pdata,
-};
-
-#ifdef CONFIG_MSM_SSBI
-static struct msm_ssbi_platform_data msm7x30_ssbi_pm8058_pdata = {
-	.rsl_id = "D:PMIC_SSBI",
-	.controller_type = MSM_SBI_CTRL_SSBI2,
-	.slave	= {
-		.name			= "pm8058-core",
-		.platform_data		= &pm8058_7x30_data,
-	},
-};
-#endif
 
 #ifdef CONFIG_FB_MSM_MDDI_NOVATEK_FWVGA
 static const struct panel_id *novatek_panels[] = {
@@ -810,15 +760,15 @@ static struct msm_camera_sensor_info msm_camera_sensor_semc_camera_data = {
 	},
 	.vcam_sd       = {
 		.type = MSM_CAMERA_SENSOR_PWR_VREG,
-		.resource.name = "gp15"
+		.resource.name = "ldo22"
 	},
 	.vcam_sa       = {
 		.type = MSM_CAMERA_SENSOR_PWR_VREG,
-		.resource.name = "gp2"
+		.resource.name = "ldo11"
 	},
 	.vcam_af       = {
 		.type = MSM_CAMERA_SENSOR_PWR_VREG,
-		.resource.name = "gp10"
+		.resource.name = "ldo16"
 	},
 };
 
@@ -858,15 +808,15 @@ static struct msm_camera_sensor_info msm_camera_sensor_semc_sub_camera_data = {
 	},
 	.vcam_sd       = {
 		.type = MSM_CAMERA_SENSOR_PWR_VREG,
-		.resource.name = "gp15"
+		.resource.name = "ldo22"
 	},
 	.vcam_sa       = {
 		.type = MSM_CAMERA_SENSOR_PWR_VREG,
-		.resource.name = "gp2"
+		.resource.name = "ldo11"
 	},
 	.vcam_af       = {
 		.type = MSM_CAMERA_SENSOR_PWR_VREG,
-		.resource.name = "gp10"
+		.resource.name = "ldo16"
 	},
 };
 
@@ -988,7 +938,7 @@ void msm_snddev_poweramp_off(void)
 }
 
 static struct regulator_bulk_data snddev_regs[] = {
-	{ .supply = "gp4", .min_uV = 2600000, .max_uV = 2600000 },
+	{ .supply = "ldo10", .min_uV = 2600000, .max_uV = 2600000 },
 	{ .supply = "ncp", .min_uV = 1800000, .max_uV = 1800000 },
 };
 
@@ -1195,8 +1145,6 @@ static int __init buses_init(void)
 		pr_err("%s: gpio_tlmm_config (gpio=%d) failed\n",
 		       __func__, PMIC_GPIO_INT);
 
-	pm8058_7x30_data.keypad_pdata = &pm8xxx_keypad_data;
-
 	return 0;
 }
 
@@ -1249,7 +1197,7 @@ static void msm_marimba_shutdown_power(void)
 #define MARIMBA_SLAVE_ID_QMEMBIST_ADDR	0X66
 
 static struct regulator_bulk_data codec_regs[] = {
-	{ .supply = "s4", .min_uV = 2200000, .max_uV = 2200000 },
+	{ .supply = "smps4", .min_uV = 2200000, .max_uV = 2200000 },
 };
 
 static int __init msm_marimba_codec_init(void)
@@ -1313,9 +1261,9 @@ static void __init msm7x30_init_marimba(void)
 	int rc;
 
 	struct regulator_bulk_data regs[] = {
-		{ .supply = "s3",   .min_uV = 1800000, .max_uV = 1800000 },
-		{ .supply = "gp16", .min_uV = 1200000, .max_uV = 1200000 },
-		{ .supply = "usb2", .min_uV = 1800000, .max_uV = 1800000 },
+		{ .supply = "smps3",   .min_uV = 1800000, .max_uV = 1800000 },
+		{ .supply = "ldo24", .min_uV = 1200000, .max_uV = 1200000 },
+		{ .supply = "ldo7", .min_uV = 1800000, .max_uV = 1800000 },
 	};
 
 	rc = msm_marimba_codec_init();
@@ -1659,8 +1607,8 @@ static struct platform_device novatek_device = {
 /*  Generic LCD Regulators On function for SEMC mogami displays */
 static void semc_mogami_lcd_regulators_on(void)
 {
-	vreg_helper("gp7", 1800000, 1);  /* L8 */
-	vreg_helper("gp6", LCD_VDD_VOLTAGE, 1);  /* L15 */
+	vreg_helper("ldo8", 1800000, 1);  /* L8 */
+	vreg_helper("ldo15", LCD_VDD_VOLTAGE, 1);  /* L15 */
 }
 
 /* Generic Power On function for SEMC mogami displays */
@@ -1701,8 +1649,8 @@ static void sony_hvga_lcd_power_off(void)
 {
 	gpio_set_value(GPIO_MSM_MDDI_XRES, 0);
 	msleep(121);    /* spec: > 120ms */
-	vreg_helper("gp7", 1800000, 0);  /* L8 */
-	vreg_helper("gp6", LCD_VDD_VOLTAGE, 0);  /* L15 */
+	vreg_helper("ldo8", 1800000, 0);  /* L8 */
+	vreg_helper("ldo15", LCD_VDD_VOLTAGE, 0);  /* L15 */
 }
 
 static void sony_hvga_lcd_exit_deep_standby(void)
@@ -1742,8 +1690,8 @@ static void hitachi_hvga_lcd_power_off(void)
 {
 	gpio_set_value(GPIO_MSM_MDDI_XRES, 0);
 	msleep(121);    /* spec: > 120ms */
-	vreg_helper("gp7", 1800000, 0);  /* L8 */
-	vreg_helper("gp6", LCD_VDD_VOLTAGE, 0);  /* L15 */
+	vreg_helper("ldo8", 1800000, 0);  /* L8 */
+	vreg_helper("ldo15", LCD_VDD_VOLTAGE, 0);  /* L15 */
 }
 
 static void hitachi_hvga_lcd_exit_deep_standby(void)
@@ -1783,8 +1731,8 @@ static void sii_hvga_lcd_power_off(void)
 {
 	gpio_set_value(GPIO_MSM_MDDI_XRES, 0);
 	msleep(121);    /* spec: > 120ms */
-	vreg_helper("gp7", 1800000, 0);  /* L8 */
-	vreg_helper("gp6", LCD_VDD_VOLTAGE, 0);  /* L15 */
+	vreg_helper("ldo8", 1800000, 0);  /* L8 */
+	vreg_helper("ldo15", LCD_VDD_VOLTAGE, 0);  /* L15 */
 }
 
 static void sii_hvga_lcd_exit_deep_standby(void)
@@ -1824,8 +1772,8 @@ static void auo_hvga_lcd_power_off(void)
 {
 	gpio_set_value(GPIO_MSM_MDDI_XRES, 0);
 	msleep(121);    /* spec: > 120ms */
-	vreg_helper("gp7", 1800000, 0);  /* L8 */
-	vreg_helper("gp6", LCD_VDD_VOLTAGE, 0);  /* L15 */
+	vreg_helper("ldo8", 1800000, 0);  /* L8 */
+	vreg_helper("ldo15", LCD_VDD_VOLTAGE, 0);  /* L15 */
 }
 
 static void auo_hvga_lcd_exit_deep_standby(void)
@@ -2051,7 +1999,7 @@ static int clearpad_vreg_configure(int enable)
 {
 	int rc = 0;
 
-	rc = vreg_helper("gp13", TOUCH_VDD_VOLTAGE, enable);
+	rc = vreg_helper("ldo20", TOUCH_VDD_VOLTAGE, enable);
 
 	return rc;
 }
@@ -2374,7 +2322,7 @@ static void apds9702_hw_config(int enable)
 
 static void apds9702_power_mode(int enable)
 {
-	vreg_helper("wlan", APDS9702_VDD_VOLTAGE, enable);
+	vreg_helper("ldo13", APDS9702_VDD_VOLTAGE, enable);
 
 	usleep_range(APDS9702_WAIT_TIME, APDS9702_WAIT_TIME);
 }
@@ -2533,20 +2481,6 @@ static struct i2c_board_info msm_marimba_board_info[] = {
 		I2C_BOARD_INFO("marimba", 0xc),
 		.platform_data = &marimba_pdata,
 	}
-};
-
-
-static struct msm_handset_platform_data hs_platform_data = {
-	.hs_name = "7k_handset",
-	.pwr_key_delay_ms = 500, /* 0 will disable end key */
-};
-
-static struct platform_device hs_device = {
-	.name   = "msm-handset",
-	.id     = -1,
-	.dev    = {
-		.platform_data = &hs_platform_data,
-	},
 };
 
 static struct msm_pm_platform_data msm_pm_data[MSM_PM_SLEEP_MODE_NR] = {
@@ -2738,7 +2672,7 @@ static int msm_hsusb_ldo_init(int init)
 	int def_vol = 3400000;
 
 	if (init) {
-		vreg_3p3 = regulator_get(NULL, "usb");
+		vreg_3p3 = regulator_get(NULL, "ldo6");
 		if (IS_ERR(vreg_3p3))
 			return PTR_ERR(vreg_3p3);
 		regulator_set_voltage(vreg_3p3, def_vol, def_vol);
@@ -2994,10 +2928,10 @@ static struct simple_remote_platform_regulators regs[] =  {
 		.name = "ncp",
 	},
 	{
-		.name = "s3",
+		.name = "smps3",
 	},
 	{
-		.name = "s2",
+		.name = "smps2",
 	},
 
 };
@@ -3059,9 +2993,6 @@ static struct platform_device *devices[] __initdata = {
 #ifdef CONFIG_PSTORE_RAM
 	&ramoops_dev,
 #endif
-#ifdef CONFIG_MSM_PROC_COMM_REGULATOR
-	&msm_proccomm_regulator_dev,
-#endif
 	&asoc_msm_pcm,
 	&asoc_msm_dai0,
 	&asoc_msm_dai1,
@@ -3085,9 +3016,6 @@ static struct platform_device *devices[] __initdata = {
 #ifdef CONFIG_SPI_QSD
 	&qsd_device_spi,
 #endif
-#ifdef CONFIG_MSM_SSBI
-	&msm_device_ssbi_pmic1,
-#endif
 #ifdef CONFIG_I2C_SSBI
 	&msm_device_ssbi7,
 #endif
@@ -3105,7 +3033,6 @@ static struct platform_device *devices[] __initdata = {
 #ifdef CONFIG_SEMC_RPC_SERVER_HANDSET
 	&semc_rpc_handset_device,
 #endif
-	&hs_device,
 #ifdef CONFIG_MSM7KV2_AUDIO
 	&msm_aictl_device,
 	&msm_mi2s_device,
@@ -3157,7 +3084,6 @@ static struct platform_device *devices[] __initdata = {
 	&msm_adc_device,
 	&msm_ebi0_thermal,
 	&msm_ebi1_thermal,
-	&msm_adsp_device,
 #ifdef CONFIG_ION_MSM
 	&ion_dev,
 #endif
@@ -3181,7 +3107,7 @@ msm_i2c_gpio_config(int adap_id, int config_type)
 #ifndef CONFIG_QUP_EXCLUSIVE_TO_CAMERA
 static struct regulator *qup_vreg;
 #endif
-static void
+void
 qup_i2c_gpio_config(int adap_id, int config_type)
 {
 	int rc = 0;
@@ -3265,11 +3191,6 @@ static struct msm_i2c_ssbi_platform_data msm_i2c_ssbi7_pdata = {
 	.controller_type = MSM_SBI_CTRL_SSBI,
 };
 #endif
-
-static void __init msm7x30_init_irq(void)
-{
-	msm_init_irq();
-}
 
 static struct msm_gpio msm_nand_ebi2_cfg_data[] = {
 	{GPIO_CFG(86, 1, GPIO_CFG_OUTPUT, GPIO_CFG_PULL_UP, GPIO_CFG_8MA), "ebi2_cs1"},
@@ -3609,7 +3530,7 @@ out:
 static void __init msm7x30_init_mmc(void)
 {
 #ifdef CONFIG_MMC_MSM_SDC3_SUPPORT
-	if (mmc_regulator_init(3, "s3", 1800000))
+	if (mmc_regulator_init(3, "smps3", 1800000))
 		goto out3;
 
 	msm_sdcc_setup_gpio(3, 1);
@@ -3617,7 +3538,7 @@ static void __init msm7x30_init_mmc(void)
 out3:
 #endif
 #ifdef CONFIG_MMC_MSM_SDC4_SUPPORT
-	if (mmc_regulator_init(4, "mmc", 2850000))
+	if (mmc_regulator_init(4, "ldo5", 2850000))
 		return;
 
 	msm_add_sdcc(4, &msm7x30_sdc4_data);
@@ -3628,13 +3549,13 @@ out3:
 static void __init shared_vreg_on(void)
 {
 #ifndef CONFIG_TOUCHSCREEN_CLEARPAD
-	vreg_helper("gp13", TOUCH_VDD_VOLTAGE, 1); /* ldo20 - Touch */
+	vreg_helper("ldo20", TOUCH_VDD_VOLTAGE, 1); /* ldo20 - Touch */
 #endif
-	vreg_helper("gp4", 2600000, 1);  /* ldo10 - BMA150, AK8975B */
+	vreg_helper("ldo10", 2600000, 1);  /* ldo10 - BMA150, AK8975B */
 #ifdef CONFIG_FB_MSM_MDDI_NOVATEK_FWVGA
-	vreg_helper("gp6", LCD_VDD_VOLTAGE, 1);  /* ldo15 - LCD */
+	vreg_helper("ldo15", LCD_VDD_VOLTAGE, 1);  /* ldo15 - LCD */
 #endif
-	vreg_helper("gp7", 1800000, 1);  /* ldo08 - BMA150, AK8975B, LCD, Touch, HDMI */
+	vreg_helper("ldo8", 1800000, 1);  /* ldo08 - BMA150, AK8975B, LCD, Touch, HDMI */
 }
 
 static void __init msm7x30_init_nand(void)
@@ -3729,7 +3650,8 @@ static void __init msm7x30_init(void)
 {
 	unsigned smem_size;
 	unsigned int boot_reason;
-
+	buses_init();
+	of_platform_populate(NULL, of_default_bus_match_table, NULL, NULL);
 	wlan_init_seq();
 
 	msm_clock_init(&msm7x30_clock_init_data);
@@ -3750,13 +3672,6 @@ static void __init msm7x30_init(void)
 #endif
 	msm_uart_dm1_pdata.wakeup_irq = gpio_to_irq(136);
 	msm_device_uart_dm1.dev.platform_data = &msm_uart_dm1_pdata;
-
-	buses_init();
-
-#ifdef CONFIG_MSM_SSBI
-	msm_device_ssbi_pmic1.dev.platform_data =
-				&msm7x30_ssbi_pm8058_pdata;
-#endif
 
 	platform_add_devices(msm_footswitch_devices,
 			     msm_num_footswitch_devices);
@@ -3989,14 +3904,19 @@ static void __init msm7x30_fixup(struct tag *tags, char **cmdline,
 
 }
 
-MACHINE_START(SEMC_MOGAMI, "mogami")
+static const char *msm7x30_dt_compat[] __initdata = {
+	"qcom,msm7x30",
+	NULL
+};
+
+DT_MACHINE_START(SEMC_MOGAMI, "Qualcomm MSM7x30 (FDT)")
 	.atag_offset = 0x100,
 	.map_io = msm7x30_map_io,
 	.reserve = msm7x30_reserve,
-	.init_irq = msm7x30_init_irq,
+	.init_irq = irqchip_init,
 	.init_machine = msm7x30_init,
 	.init_time = msm_timer_init,
 	.init_early = msm7x30_init_early,
-	.handle_irq = vic_handle_irq,
 	.fixup = msm7x30_fixup,
+	.dt_compat = msm7x30_dt_compat,
 MACHINE_END

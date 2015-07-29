@@ -19,7 +19,7 @@
 #include <linux/bootmem.h>
 #include <linux/io.h>
 #include <linux/msm_ssbi.h>
-#include <linux/mfd/pmic8058.h>
+#include <linux/mfd/pm8xxx/gpio.h>
 #include <linux/mfd/marimba.h>
 #include <linux/i2c.h>
 #include <linux/i2c-gpio.h>
@@ -56,6 +56,7 @@
 #include <asm/mach/mmc.h>
 #include <mach/vreg.h>
 #include <linux/platform_data/qcom_crypto_device.h>
+#include <linux/irqchip.h>
 
 #include "timer.h"
 #include "pm.h"
@@ -68,7 +69,6 @@
 #include <mach/qdsp5v2/mi2s.h>
 #include <mach/qdsp5v2/audio_dev_ctl.h>
 #include "smd_private.h"
-#include "proccomm-regulator.h"
 
 #include "board-hw7x30.h"
 #include "pm.h"
@@ -130,6 +130,10 @@ struct pm8xxx_gpio_init_info {
 	unsigned	gpio;
 	struct pm_gpio	config;
 };
+
+#define PM8058_IRQ_BLOCK_BIT(block, bit) ((block) * 8 + (bit))
+#define PM8058_GPIO_IRQ(base, gpio)	((base) + \
+					PM8058_IRQ_BLOCK_BIT(24, (gpio)))
 
 static int pm8058_gpios_init(void)
 {
@@ -221,183 +225,6 @@ static int pm8058_gpios_init(void)
 
 	return 0;
 }
-
-/* Regulator API support */
-
-#ifdef CONFIG_MSM_PROC_COMM_REGULATOR
-static struct platform_device msm_proccomm_regulator_dev = {
-	.name	= PROCCOMM_REGULATOR_DEV_NAME,
-	.id	= -1,
-	.dev	= {
-		.platform_data = &msm7x30_proccomm_regulator_data
-	}
-};
-#endif
-
-static const unsigned int pm8xxx_keymap[] = {
-	KEY(0, 0, KEY_VOLUMEUP),
-	KEY(0, 1, KEY_VOLUMEDOWN),
-};
-
-static struct matrix_keymap_data pm8xxx_keymap_data = {
-	.keymap_size	= ARRAY_SIZE(pm8xxx_keymap),
-	.keymap		= pm8xxx_keymap,
-};
-
-static struct pm8xxx_keypad_platform_data pm8xxx_keypad_pdata = {
-	.input_name		= "pm8xxx-keypad",
-	.input_phys_device	= "pm8xxx-keypad/input0",
-	.num_rows		= 5,
-	.num_cols		= 5,
-	.rows_gpio_start	= PM8058_GPIO_PM_TO_SYS(8),
-	.cols_gpio_start	= PM8058_GPIO_PM_TO_SYS(0),
-	.debounce_ms		= 15,
-	.scan_delay_ms		= 32,
-	.row_hold_ns		= 91500,
-	.wakeup			= 1,
-	.keymap_data		= &pm8xxx_keymap_data,
-};
-
-static struct pm8xxx_irq_platform_data pm8xxx_irq_pdata = {
-	.irq_base		= PMIC8058_IRQ_BASE,
-	.devirq			= MSM_GPIO_TO_INT(PMIC_GPIO_INT),
-	.irq_trigger_flag       = IRQF_TRIGGER_LOW,
-};
-
-static struct pm8xxx_gpio_platform_data pm8xxx_gpio_pdata = {
-	.gpio_base		= PM8058_GPIO_PM_TO_SYS(0),
-};
-
-static struct pm8xxx_mpp_platform_data pm8xxx_mpp_pdata = {
-	.mpp_base	= PM8058_MPP_PM_TO_SYS(0),
-};
-
-#define PM8XXX_LED_PWM_PERIOD	1000
-#define PM8XXX_LED_PWM_DUTY_MS	20
-
-static struct led_info pm8xxx_led_info[] = {
-	[0] = {
-		.name = "button-backlight",
-	},
-	[1] = {
-		.name = "red",
-	},
-	[2] = {
-		.name = "green",
-	},
-	[3] = {
-		.name = "blue",
-	},
-	[4] = {
-		.name = "flashlight",
-	},
-};
-
-static struct led_platform_data pm8xxx_led_core_pdata = {
-	.num_leds = ARRAY_SIZE(pm8xxx_led_info),
-	.leds = pm8xxx_led_info,
-};
-
-static int pm8xxx_notled_pwm_duty_pcts[56] = {
-	1, 4, 8, 12, 16, 20, 24, 28, 32, 36,
-	40, 44, 46, 52, 56, 60, 64, 68, 72, 76,
-	80, 84, 88, 92, 96, 100, 100, 100, 98, 95,
-	92, 88, 84, 82, 78, 74, 70, 66, 62, 58,
-	58, 54, 50, 48, 42, 38, 34, 30, 26, 22,
-	14, 10, 6, 4, 1
-};
-
-/*
- * Note: There is a bug in LPG module that results in incorrect
- * behavior of pattern when LUT index 0 is used. So effectively
- * there are 63 usable LUT entries.
- */
-static struct pm8xxx_pwm_duty_cycles pm8xxx_notled_pwm_duty_cycles = {
-	.duty_pcts = (int *)&pm8xxx_notled_pwm_duty_pcts,
-	.num_duty_pcts = ARRAY_SIZE(pm8xxx_notled_pwm_duty_pcts),
-	.duty_ms = PM8XXX_LED_PWM_DUTY_MS,
-	.start_idx = 1,
-};
-
-static struct pm8xxx_led_config pm8xxx_led_configs[] = {
-	[0] = {
-		.id = PM8XXX_ID_LED_KB_LIGHT,
-		.mode = PM8XXX_LED_MODE_PWM1,
-		.max_current = 150, /* 10 <= I <= 150 */
-		.pwm_channel = 3,
-		.pwm_period_us = PM8XXX_LED_PWM_PERIOD,
-	},
-	[1] = {
-		.id = PM8XXX_ID_LED_0,
-		.mode = PM8XXX_LED_MODE_PWM1,
-		.max_current = 40, /* 2 <= I <= 40 */
-		.pwm_channel = 4,
-		.pwm_period_us = PM8XXX_LED_PWM_PERIOD,
-		.pwm_duty_cycles = &pm8xxx_notled_pwm_duty_cycles,
-	},
-	[2] = {
-		.id = PM8XXX_ID_LED_2,
-		.mode = PM8XXX_LED_MODE_PWM2,
-		.max_current = 40, /* 2 <= I <= 40 */
-		.pwm_channel = 6,
-		.pwm_period_us = PM8XXX_LED_PWM_PERIOD,
-		.pwm_duty_cycles = &pm8xxx_notled_pwm_duty_cycles,
-	},
-	[3] = {
-		.id = PM8XXX_ID_LED_1,
-		.mode = PM8XXX_LED_MODE_PWM3,
-		.max_current = 40, /* 2 <= I <= 40 */
-		.pwm_channel = 5,
-		.pwm_period_us = PM8XXX_LED_PWM_PERIOD,
-		.pwm_duty_cycles = &pm8xxx_notled_pwm_duty_cycles,
-	},
-	[4] = {
-		.id = PM8XXX_ID_FLASH_LED_0,
-		.mode = PM8XXX_LED_MODE_PWM1,
-		.max_current = 300,
-		.pwm_channel = 0,
-		.pwm_period_us = PM8XXX_LED_PWM_PERIOD,
-	},
-};
-
-
-static struct pm8xxx_led_platform_data pm8xxx_leds_pdata = {
-	.led_core = &pm8xxx_led_core_pdata,
-	.configs = pm8xxx_led_configs,
-	.num_configs = ARRAY_SIZE(pm8xxx_led_configs),
-	.use_pwm = 1,
-};
-
-static struct pm8xxx_vibrator_platform_data pm8xxx_vibrator_pdata = {
-	.initial_vibrate_ms = 0,
-	.level_mV = 3000,
-	.max_timeout_ms = 15000,
-};
-
-static struct pm8xxx_misc_platform_data pm8xxx_misc_pdata = {
-	.priority = 0,
-};
-
-static struct pm8058_platform_data pm8058_7x30_data = {
-	.irq_pdata		= &pm8xxx_irq_pdata,
-	.gpio_pdata		= &pm8xxx_gpio_pdata,
-	.mpp_pdata		= &pm8xxx_mpp_pdata,
-	.keypad_pdata		= &pm8xxx_keypad_pdata,
-	.leds_pdata		= &pm8xxx_leds_pdata,
-	.vibrator_pdata		= &pm8xxx_vibrator_pdata,
-	.misc_pdata		= &pm8xxx_misc_pdata,
-};
-
-#ifdef CONFIG_MSM_SSBI
-static struct msm_ssbi_platform_data msm7x30_ssbi_pm8058_pdata = {
-	.rsl_id = "D:PMIC_SSBI",
-	.controller_type = MSM_SBI_CTRL_SSBI2,
-	.slave	= {
-		.name			= "pm8058-core",
-		.platform_data		= &pm8058_7x30_data,
-	},
-};
-#endif
 
 static struct i2c_board_info msm_camera_boardinfo[] __initdata = {
 #ifdef CONFIG_S5K4E1GX
@@ -566,9 +393,9 @@ static void config_camera_off_gpios(void)
 
 static struct regulator_bulk_data camera_power_regs[] = {
 	/* IO_VDD & D_VDD */
-        { .supply = "gp2", .min_uV = 1800000, .max_uV = 1800000 },
+        { .supply = "ldo11", .min_uV = 1800000, .max_uV = 1800000 },
         /* VCM_VDD & A_VDD */
-	{ .supply = "gp7", .min_uV = 2850000, .max_uV = 2850000 },
+	{ .supply = "ldo8", .min_uV = 2850000, .max_uV = 2850000 },
 };
 
 static int config_camera_power_on(void)
@@ -1203,10 +1030,10 @@ static int fm_radio_setup(struct marimba_fm_platform_data *pdata)
 		goto out;
 	}
 	if (bahama_not_marimba) {
-		fm_regulator = regulator_get(NULL, "s3");
+		fm_regulator = regulator_get(NULL, "smps3");
 		voltage = 1800000;
 	} else {
-		fm_regulator = regulator_get(NULL, "s2");
+		fm_regulator = regulator_get(NULL, "smps2");
 		voltage = 1300000;
 	}
 
@@ -1315,7 +1142,7 @@ static struct marimba_fm_platform_data marimba_fm_pdata = {
 #define BAHAMA_SLAVE_ID_QMEMBIST_ADDR   0x7B
 
 static struct regulator_bulk_data codec_regs[] = {
-	{ .supply = "s4", .min_uV = 2200000, .max_uV = 2200000 },
+	{ .supply = "smps4", .min_uV = 2200000, .max_uV = 2200000 },
 };
 
 static int __init msm_marimba_codec_init(void)
@@ -1385,9 +1212,9 @@ static void __init msm7x30_init_marimba(void)
 	int rc;
 
 	struct regulator_bulk_data regs[] = {
-		{ .supply = "s3",   .min_uV = 1800000, .max_uV = 1800000 },
-		{ .supply = "gp16", .min_uV = 1200000, .max_uV = 1200000 },
-		{ .supply = "usb2", .min_uV = 1800000, .max_uV = 1800000 },
+		{ .supply = "smps3",   .min_uV = 1800000, .max_uV = 1800000 },
+		{ .supply = "ldo24", .min_uV = 1200000, .max_uV = 1200000 },
+		{ .supply = "ldo7", .min_uV = 1800000, .max_uV = 1800000 },
 	};
 
 	rc = msm_marimba_codec_init();
@@ -1704,7 +1531,7 @@ static struct aps_12d_platform_data aps_12d_pdata = {
 	.irdr_current = APS_12D_IRDR_50,
 	.mod_freq = APS_12D_MOD_FREQ_DC,
 	.allow_reconfig = true,
-	.vcc_regulator = "gp4"
+	.vcc_regulator = "ldo10"
 };
 #endif
 
@@ -1718,7 +1545,7 @@ static int lsm303dlh_init(void)
 	if (lsm303dlh_reg)
 		return 0;
 
-	lsm303dlh_reg = regulator_get(NULL, "gp4");
+	lsm303dlh_reg = regulator_get(NULL, "ldo10");
 	if (IS_ERR(lsm303dlh_reg)) {
 		ret = PTR_ERR(lsm303dlh_reg);
 		pr_err("%s: Failed to request regulator. Code: %d.",
@@ -1849,20 +1676,6 @@ static struct i2c_board_info msm_marimba_board_info[] = {
 	}
 };
 
-
-static struct msm_handset_platform_data hs_platform_data = {
-	.hs_name = "7k_handset",
-	.pwr_key_delay_ms = 0, /* 0 will disable end key */
-};
-
-static struct platform_device hs_device = {
-	.name   = "msm-handset",
-	.id     = -1,
-	.dev    = {
-		.platform_data = &hs_platform_data,
-	},
-};
-
 static struct msm_pm_platform_data msm_pm_data[MSM_PM_SLEEP_MODE_NR] = {
 	[MSM_PM_MODE(0, MSM_PM_SLEEP_MODE_POWER_COLLAPSE)] = {
 		.idle_supported = 1,
@@ -1957,7 +1770,7 @@ static int msm_hsusb_ldo_init(int init)
 	int def_vol = 3400000;
 
 	if (init) {
-		vreg_3p3 = regulator_get(NULL, "usb");
+		vreg_3p3 = regulator_get(NULL, "ldo6");
 		if (IS_ERR(vreg_3p3))
 			return PTR_ERR(vreg_3p3);
 		regulator_set_voltage(vreg_3p3, def_vol, def_vol);
@@ -2863,35 +2676,9 @@ static struct platform_device msm_adc_device = {
 	},
 };
 
-#ifdef CONFIG_BATTERY_HUAWEI
-static struct huawei_bat_platform_data huawei_bat_pdata = {
-	.technology = POWER_SUPPLY_TECHNOLOGY_LIPO,
-	.voltage_min_design = 3200,
-	.voltage_max_design = 4200,
-};
-
-static struct platform_device huawei_bat_device = {
-	.name = "huawei_battery",
-	.id = -1,
-	.dev = {
-		.platform_data = &huawei_bat_pdata,
-	}
-};
-#endif
-
-#ifdef CONFIG_MSM_HUAWEI_RMT_OEMINFO
-static struct platform_device huawei_rmt_oeminfo_device = {
-	.name		= "rmt_oeminfo",
-	.id		= -1,
-};
-#endif
-
 static struct platform_device *devices[] __initdata = {
 #if defined(CONFIG_SERIAL_MSM) || defined(CONFIG_MSM_SERIAL_DEBUGGER)
 	&msm_device_uart2,
-#endif
-#ifdef CONFIG_MSM_PROC_COMM_REGULATOR
-	&msm_proccomm_regulator_dev,
 #endif
 	&asoc_msm_pcm,
 	&asoc_msm_dai0,
@@ -2912,10 +2699,6 @@ static struct platform_device *devices[] __initdata = {
 #ifdef CONFIG_USB_G_ANDROID
 	&android_usb_device,
 #endif
-
-#ifdef CONFIG_MSM_SSBI
-	&msm_device_ssbi_pmic1,
-#endif
 #ifdef CONFIG_I2C_SSBI
 	&msm_device_ssbi7,
 #endif
@@ -2930,7 +2713,6 @@ static struct platform_device *devices[] __initdata = {
 	&msm_device_i2c_2,
 	&i2c_dcdc_device,
 	&msm_device_uart_dm1,
-	&hs_device,
 #ifdef CONFIG_MSM7KV2_AUDIO
 	&msm_aictl_device,
 	&msm_mi2s_device,
@@ -2974,15 +2756,8 @@ static struct platform_device *devices[] __initdata = {
 	&msm_adc_device,
 	&msm_ebi0_thermal,
 	&msm_ebi1_thermal,
-	&msm_adsp_device,
 #ifdef CONFIG_ION_MSM
 	&ion_dev,
-#endif
-#ifdef CONFIG_BATTERY_HUAWEI
-	&huawei_bat_device,
-#endif
-#ifdef CONFIG_MSM_HUAWEI_RMT_OEMINFO
-	&huawei_rmt_oeminfo_device,
 #endif
 };
 
@@ -3107,11 +2882,6 @@ static struct msm_i2c_ssbi_platform_data msm_i2c_ssbi7_pdata = {
 	.controller_type = MSM_SBI_CTRL_SSBI,
 };
 #endif
-
-static void __init msm7x30_init_irq(void)
-{
-	msm_init_irq();
-}
 
 struct sdcc_gpio {
 	struct msm_gpio *cfg_data;
@@ -3249,15 +3019,15 @@ static uint32_t msm_sdcc_setup_vreg(int dev_id, unsigned int enable)
 	if (dev_id == 4) {
 		if (enable) {
 			pr_debug("Enable Vdd dev_%d\n", dev_id);
-			gpio_set_value_cansleep(
-				PM8058_GPIO_PM_TO_SYS(PMIC_GPIO_SDC4_PWR_EN_N),
-						0);
+			//gpio_set_value_cansleep(
+			//	PM8058_GPIO_PM_TO_SYS(PMIC_GPIO_SDC4_PWR_EN_N),
+			//			0);
 			set_bit(dev_id, &vreg_sts);
 		} else {
 			pr_debug("Disable Vdd dev_%d\n", dev_id);
-			gpio_set_value_cansleep(
-				PM8058_GPIO_PM_TO_SYS(PMIC_GPIO_SDC4_PWR_EN_N),
-				1);
+			//gpio_set_value_cansleep(
+			//	PM8058_GPIO_PM_TO_SYS(PMIC_GPIO_SDC4_PWR_EN_N),
+			//	1);
 			clear_bit(dev_id, &vreg_sts);
 		}
 	}
@@ -3310,8 +3080,8 @@ out:
 #ifdef CONFIG_MMC_MSM_SDC4_SUPPORT
 static unsigned int msm7x30_sdcc_slot_status(struct device *dev)
 {
-	return (unsigned int) gpio_get_value_cansleep(
-		PM8058_GPIO_PM_TO_SYS(PMIC_GPIO_SD_DET));
+	//return (unsigned int) gpio_get_value_cansleep(
+	//	PM8058_GPIO_PM_TO_SYS(PMIC_GPIO_SD_DET));
 }
 #endif
 
@@ -3349,9 +3119,9 @@ static struct mmc_platform_data msm7x30_sdc4_data = {
 	.ocr_mask	= MMC_VDD_27_28 | MMC_VDD_28_29,
 	.translate_vdd	= msm_sdcc_setup_power,
 	.mmc_bus_width  = MMC_CAP_4_BIT_DATA,
-	.status      = msm7x30_sdcc_slot_status,
-	.status_irq  = PM8058_GPIO_IRQ(PMIC8058_IRQ_BASE, PMIC_GPIO_SD_DET),
-	.irq_flags = IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
+	//.status      = msm7x30_sdcc_slot_status,
+	//.status_irq  = PM8058_GPIO_IRQ(PMIC8058_IRQ_BASE, PMIC_GPIO_SD_DET),
+	//.irq_flags = IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
 	.msmsdcc_fmin	= 144000,
 	.msmsdcc_fmid	= 24576000,
 	.msmsdcc_fmax	= 49152000,
@@ -3396,14 +3166,14 @@ out:
 static void __init msm7x30_init_mmc(void)
 {
 #ifdef CONFIG_MMC_MSM_SDC2_SUPPORT
-	if (mmc_regulator_init(2, "s3", 1800000))
+	if (mmc_regulator_init(2, "smps3", 1800000))
 		goto out2;
 
 	msm_add_sdcc(2, &msm7x30_sdc2_data);
 out2:
 #endif
 #ifdef CONFIG_MMC_MSM_SDC3_SUPPORT
-	if (mmc_regulator_init(3, "s3", 1800000))
+	if (mmc_regulator_init(3, "smps3", 1800000))
 		goto out3;
 
 	msm_sdcc_setup_gpio(3, 1);
@@ -3411,7 +3181,7 @@ out2:
 out3:
 #endif
 #ifdef CONFIG_MMC_MSM_SDC4_SUPPORT
-	if (mmc_regulator_init(4, "mmc", 2850000))
+	if (mmc_regulator_init(4, "ldo5", 2850000))
 		return;
 
 	msm_add_sdcc(4, &msm7x30_sdc4_data);
@@ -3674,7 +3444,7 @@ static int synaptics_rmi4_init(void)
 	if (synaptics_reg)
 		return 0;
 
-	synaptics_reg = regulator_get(NULL, "gp4");
+	synaptics_reg = regulator_get(NULL, "ldo10");
 	if (IS_ERR(synaptics_reg)) {
 		ret = PTR_ERR(synaptics_reg);
 		pr_err("%s: Failed to request regulator. Code: %d.",
@@ -3756,7 +3526,8 @@ static void __init msm7x30_init(void)
 {
 	unsigned smem_size;
 	unsigned int boot_reason;
-
+	buses_init();
+	of_platform_populate(NULL, of_default_bus_match_table, NULL, NULL);
 	msm_clock_init(&msm7x30_clock_init_data);
 #ifdef CONFIG_SERIAL_MSM_CONSOLE
 	msm7x30_init_uart2();
@@ -3778,15 +3549,10 @@ static void __init msm7x30_init(void)
 	msm_device_tsif.dev.platform_data = &tsif_platform_data;
 #endif
 
-	buses_init();
-
-#ifdef CONFIG_MSM_SSBI
-	msm_device_ssbi_pmic1.dev.platform_data = &msm7x30_ssbi_pm8058_pdata;
-#endif
-
 	platform_add_devices(msm_footswitch_devices,
 		msm_num_footswitch_devices);
 	platform_add_devices(devices, ARRAY_SIZE(devices));
+
 #ifdef CONFIG_USB_EHCI_MSM_72K
 	msm_add_host(0, &msm_usb_host_pdata);
 #endif
@@ -3960,14 +3726,19 @@ static int __init parse_tag_memosbl(const struct tag *tag)
 }
 __tagtable(ATAG_MEM_OSBL, parse_tag_memosbl);
 
-MACHINE_START(HUAWEI_U8800, "HUAWEI U8800")
+static const char *msm7x30_dt_compat[] __initdata = {
+	"qcom,msm7x30",
+	NULL
+};
+
+DT_MACHINE_START(HUAWEI_U8800, "Qualcomm MSM7x30 (FDT)")
 	.atag_offset = 0x100,
 	.map_io = msm7x30_map_io,
 	.reserve = msm7x30_reserve,
-	.init_irq = msm7x30_init_irq,
+	.init_irq = irqchip_init,
 	.init_machine = msm7x30_init,
 	.init_time = msm_timer_init,
 	.init_early = msm7x30_init_early,
-	.handle_irq = vic_handle_irq,
 	.fixup = msm7x30_fixup,
+	.dt_compat = msm7x30_dt_compat,
 MACHINE_END

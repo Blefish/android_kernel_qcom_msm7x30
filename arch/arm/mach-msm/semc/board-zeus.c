@@ -57,6 +57,7 @@
 #include <mach/rpc_server_handset.h>
 #include <mach/socinfo.h>
 #include <mach/msm_memtypes.h>
+#include <linux/irqchip.h>
 
 #include <asm/mach/mmc.h>
 #include <asm/mach/flash.h>
@@ -79,7 +80,6 @@
 #include <linux/msm_ion.h>
 #endif
 
-#include "board-semc7x30-regulator.h"
 #include "pm.h"
 
 #include "gpio-semc.h"
@@ -479,18 +479,6 @@ static int pm8058_gpios_init(void)
 	return 0;
 }
 
-/* Regulator API support */
-
-#ifdef CONFIG_MSM_PROC_COMM_REGULATOR
-static struct platform_device msm_proccomm_regulator_dev = {
-	.name = PROCCOMM_REGULATOR_DEV_NAME,
-	.id   = -1,
-	.dev  = {
-		.platform_data = &msm7x30_proccomm_regulator_data
-	}
-};
-#endif
-
 static struct pm8xxx_irq_platform_data pm8xxx_irq_pdata = {
 	.irq_base		= PMIC8058_IRQ_BASE,
 	.devirq			= MSM_GPIO_TO_INT(PMIC_GPIO_INT),
@@ -767,25 +755,25 @@ static struct regulator *qup_vreg;
 static void msm_camera_vreg_enable(void)
 {
 	int rc;
-	vreg_helper("gp15", 1200000, 1);  /* ldo22 */
+	vreg_helper("ldo22", 1200000, 1);  /* ldo22 */
 	rc = regulator_enable(qup_vreg);
 	if (rc) {
 		pr_err("%s: regulator_enable failed: %d\n",
 		__func__, rc);
 	}
-	vreg_helper("gp2", 2800000, 1);   /* ldo11 */
+	vreg_helper("ldo11", 2800000, 1);   /* ldo11 */
 }
 
 static void msm_camera_vreg_disable(void)
 {
 	int rc;
-	vreg_helper("gp2", 2800000, 0);
+	vreg_helper("ldo11", 2800000, 0);
 	rc = regulator_disable(qup_vreg);
 	if (rc) {
 		pr_err("%s: could not disable regulator: %d\n",
 				__func__, rc);
 	}
-	vreg_helper("gp15", 1200000, 0);
+	vreg_helper("ldo22", 1200000, 0);
 }
 
 static void config_gpio_table(uint32_t *table, int len)
@@ -1107,7 +1095,7 @@ void msm_snddev_poweramp_off(void)
 }
 
 static struct regulator_bulk_data snddev_regs[] = {
-	{ .supply = "gp4", .min_uV = 2600000, .max_uV = 2600000 },
+	{ .supply = "ldo10", .min_uV = 2600000, .max_uV = 2600000 },
 	{ .supply = "ncp", .min_uV = 1800000, .max_uV = 1800000 },
 };
 
@@ -1433,9 +1421,9 @@ static void __init msm7x30_init_marimba(void)
 	int rc;
 
 	struct regulator_bulk_data regs[] = {
-		{ .supply = "s3",   .min_uV = 1800000, .max_uV = 1800000 },
-		{ .supply = "gp16", .min_uV = 1200000, .max_uV = 1200000 },
-		{ .supply = "usb2", .min_uV = 1800000, .max_uV = 1800000 },
+		{ .supply = "smps3",   .min_uV = 1800000, .max_uV = 1800000 },
+		{ .supply = "ldo24", .min_uV = 1200000, .max_uV = 1200000 },
+		{ .supply = "ldo7", .min_uV = 1800000, .max_uV = 1800000 },
 	};
 
 	rc = msm_marimba_codec_init();
@@ -1773,12 +1761,12 @@ static int novatek_power(int on)
 
 	if (on) {
 		if (!enabled_once) {
-			rc = vreg_helper("gp6", 2850000, 1);  /* ldo15 */
+			rc = vreg_helper("ldo15", 2850000, 1);  /* ldo15 */
 			if (rc)
 				goto out;
-			rc = vreg_helper("gp9", 1800000, 1);  /* ldo12 */
+			rc = vreg_helper("ldo12", 1800000, 1);  /* ldo12 */
 			if (rc) {
-				vreg_helper("gp6", 2850000, 0);
+				vreg_helper("ldo15", 2850000, 0);
 				goto out;
 			}
 			hr_usleep(21); /* spec says > 20us */
@@ -1841,7 +1829,7 @@ void charger_connected(int on)
 
 static void cypress_touch_gpio_init(void)
 {
-	vreg_helper("gp13", 3000000, 1); /* ldo20 */
+	vreg_helper("ldo20", 3000000, 1); /* ldo20 */
 
 	/* Avoid writing firmward on SP3 */
 	if (BOARD_HWID_SP3 == board_hwid)
@@ -1988,20 +1976,6 @@ static struct i2c_board_info msm_marimba_board_info[] = {
 		I2C_BOARD_INFO("marimba", 0xc),
 		.platform_data = &marimba_pdata,
 	}
-};
-
-
-static struct msm_handset_platform_data hs_platform_data = {
-	.hs_name = "7k_handset",
-	.pwr_key_delay_ms = 500, /* 0 will disable end key */
-};
-
-static struct platform_device hs_device = {
-	.name   = "msm-handset",
-	.id     = -1,
-	.dev    = {
-		.platform_data = &hs_platform_data,
-	},
 };
 
 static struct msm_pm_platform_data msm_pm_data[MSM_PM_SLEEP_MODE_NR] = {
@@ -2198,7 +2172,7 @@ static struct regulator *vreg_3p3;
 static int msm_hsusb_ldo_init(int init)
 {
 	if (init) {
-		vreg_3p3 = regulator_get(NULL, "usb");
+		vreg_3p3 = regulator_get(NULL, "ldo6");
 		if (IS_ERR(vreg_3p3))
 			return PTR_ERR(vreg_3p3);
 		regulator_set_voltage(vreg_3p3, USB_VREG_MV * 1000, USB_VREG_MV * 1000);
@@ -2455,10 +2429,10 @@ static struct simple_remote_platform_regulators regs[] =  {
 		.name = "ncp",
 	},
 	{
-		.name = "s3",
+		.name = "smps3",
 	},
 	{
-		.name = "s2",
+		.name = "smps2",
 	},
 
 };
@@ -2689,9 +2663,6 @@ static struct platform_device *devices[] __initdata = {
 #ifdef CONFIG_PSTORE_RAM
 	&ramoops_dev,
 #endif
-#ifdef CONFIG_MSM_PROC_COMM_REGULATOR
-	&msm_proccomm_regulator_dev,
-#endif
 	&asoc_msm_pcm,
 	&asoc_msm_dai0,
 	&asoc_msm_dai1,
@@ -2734,7 +2705,6 @@ static struct platform_device *devices[] __initdata = {
 #ifdef CONFIG_SEMC_RPC_SERVER_HANDSET
 	&semc_rpc_handset_device,
 #endif
-	&hs_device,
 #ifdef CONFIG_MSM7KV2_AUDIO
 	&msm_aictl_device,
 	&msm_mi2s_device,
@@ -2780,7 +2750,6 @@ static struct platform_device *devices[] __initdata = {
 	&msm_adc_device,
 	&msm_ebi0_thermal,
 	&msm_ebi1_thermal,
-	&msm_adsp_device,
 #ifdef CONFIG_ION_MSM
 	&ion_dev,
 #endif
@@ -2885,11 +2854,6 @@ static struct msm_i2c_ssbi_platform_data msm_i2c_ssbi7_pdata = {
 	.controller_type = MSM_SBI_CTRL_SSBI,
 };
 #endif
-
-static void __init msm7x30_init_irq(void)
-{
-	msm_init_irq();
-}
 
 static struct msm_gpio msm_nand_ebi2_cfg_data[] = {
 	{GPIO_CFG(86, 1, GPIO_CFG_OUTPUT, GPIO_CFG_PULL_UP, GPIO_CFG_8MA), "ebi2_cs1"},
@@ -3195,7 +3159,7 @@ out:
 static void __init msm7x30_init_mmc(void)
 {
 #ifdef CONFIG_MMC_MSM_SDC3_SUPPORT
-	if (mmc_regulator_init(3, "s3", 1800000))
+	if (mmc_regulator_init(3, "smps3", 1800000))
 		goto out3;
 
 	msm_sdcc_setup_gpio(3, 1);
@@ -3203,7 +3167,7 @@ static void __init msm7x30_init_mmc(void)
 out3:
 #endif
 #ifdef CONFIG_MMC_MSM_SDC4_SUPPORT
-	if (mmc_regulator_init(4, "mmc", 2850000))
+	if (mmc_regulator_init(4, "ldo5", 2850000))
 		return;
 
 	msm_add_sdcc(4, &msm7x30_sdc4_data);
@@ -3227,11 +3191,11 @@ static void __init zeus_temp_fixups(void)
 				GPIO_CFG_2MA), GPIO_CFG_ENABLE);
 
 	/* The sequencing for AKM & BMA needs to be L10 -> L8 */
-	vreg_helper("gp4", 2600000, 1);  /* ldo10 - BMA150, AK8975B */
-	vreg_helper("gp7", 1800000, 1);  /* ldo08 - BMA150, AK8975B */
+	vreg_helper("ldo10", 2600000, 1);  /* ldo10 - BMA150, AK8975B */
+	vreg_helper("ldo8", 1800000, 1);  /* ldo08 - BMA150, AK8975B */
 
-	vreg_helper("wlan", 1800000, 1); /* ldo13 - touchpad VDIO */
-	vreg_helper("gp10", 2800000, 1); /* ldo16 - touchpad */
+	vreg_helper("ldo13", 1800000, 1); /* ldo13 - touchpad VDIO */
+	vreg_helper("ldo16", 2800000, 1); /* ldo16 - touchpad */
 }
 
 static void __init msm7x30_init_nand(void)
@@ -3398,7 +3362,7 @@ static void __init msm7x30_init(void)
 {
 	unsigned smem_size;
 	unsigned int boot_reason;
-
+	of_platform_populate(NULL, of_default_bus_match_table, NULL, NULL);
 	msm_clock_init(&msm7x30_clock_init_data);
 #ifdef CONFIG_SERIAL_MSM_CONSOLE
 	msm7x30_init_uart3();
@@ -3664,14 +3628,19 @@ static int __init board_wifi_addr_setup(char *wifiaddr)
 __setup("bt0.ieee_addr=", board_bt_addr_setup);
 __setup("wifi0.eth_addr=", board_wifi_addr_setup);
 
-MACHINE_START(SEMC_ZEUS, "zeus")
+static const char *msm7x30_dt_compat[] __initdata = {
+	"qcom,msm7x30",
+	NULL
+};
+
+DT_MACHINE_START(SEMC_MOGAMI, "Qualcomm MSM7x30 (FDT)")
 	.atag_offset = 0x100,
 	.map_io = msm7x30_map_io,
 	.reserve = msm7x30_reserve,
-	.init_irq = msm7x30_init_irq,
+	.init_irq = irqchip_init,
 	.init_machine = msm7x30_init,
 	.init_time = msm_timer_init,
 	.init_early = msm7x30_init_early,
-	.handle_irq = vic_handle_irq,
 	.fixup = msm7x30_fixup,
+	.dt_compat = msm7x30_dt_compat,
 MACHINE_END

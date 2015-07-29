@@ -499,7 +499,7 @@ static void msm_ion_get_heap_base(struct device_node *node,
 
 	pnode = of_parse_phandle(node, "linux,contiguous-region", 0);
 	if (pnode != NULL) {
-		heap->base = cma_get_base(heap->priv);
+		heap->base = 0;
 		of_node_put(pnode);
 	}
 

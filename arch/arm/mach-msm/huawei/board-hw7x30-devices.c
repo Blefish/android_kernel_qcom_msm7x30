@@ -12,7 +12,8 @@
  * GNU General Public License for more details.
  *
  */
-
+#define PM8058_IRQ_BLOCK_BIT(block, bit) ((block) * 8 + (bit))
+#define PM8058_CHGVAL_IRQ		PM8058_IRQ_BLOCK_BIT(1, 7)
 #include <linux/kernel.h>
 #include <linux/platform_device.h>
 #include <linux/msm_rotator.h>
@@ -31,9 +32,7 @@
 
 #include <asm/mach/mmc.h>
 #include <mach/msm_hsusb.h>
-#ifdef CONFIG_PMIC8058
-#include <linux/mfd/pmic8058.h>
-#endif
+#include <linux/mfd/pm8xxx/gpio.h>
 #include <mach/dal_axi.h>
 #include <mach/msm_memtypes.h>
 #include "pm.h"
@@ -75,21 +74,6 @@ struct platform_device msm_ebi1_thermal = {
 	.id             = 1,
 	.num_resources  = 1,
 	.resource       = msm_ebi1_thermal_resources
-};
-
-static struct resource resources_adsp[] = {
-{
-	.start  = INT_ADSP_A9_A11,
-	.end    = INT_ADSP_A9_A11,
-	.flags  = IORESOURCE_IRQ,
-},
-};
-
-struct platform_device msm_adsp_device = {
-	.name           = "msm_adsp",
-	.id             = -1,
-	.num_resources  = ARRAY_SIZE(resources_adsp),
-	.resource       = resources_adsp,
 };
 
 static struct resource resources_uart1[] = {
@@ -400,24 +384,6 @@ struct platform_device qup_device_i2c = {
 	.num_resources	= ARRAY_SIZE(resources_qup),
 	.resource	= resources_qup,
 };
-
-#ifdef CONFIG_MSM_SSBI
-#define MSM_SSBI_PMIC1_PHYS	0xAD900000
-static struct resource msm_ssbi_pmic1_resources[] = {
-	{
-		.start  = MSM_SSBI_PMIC1_PHYS,
-		.end    = MSM_SSBI_PMIC1_PHYS + SZ_4K - 1,
-		.flags  = IORESOURCE_MEM,
-	},
-};
-
-struct platform_device msm_device_ssbi_pmic1 = {
-	.name           = "msm_ssbi",
-	.id             = 0,
-	.resource       = msm_ssbi_pmic1_resources,
-	.num_resources  = ARRAY_SIZE(msm_ssbi_pmic1_resources),
-};
-#endif
 
 #ifdef CONFIG_I2C_SSBI
 #define MSM_SSBI7_PHYS  0xAC800000
@@ -1287,29 +1253,3 @@ struct platform_device *msm_footswitch_devices[] = {
 	FS_PCOM(FS_VPE,    "fs_vpe",    NULL),
 };
 unsigned msm_num_footswitch_devices = ARRAY_SIZE(msm_footswitch_devices);
-
-static struct resource gpio_resources[] = {
-	{
-		.start	= INT_GPIO_GROUP1,
-		.flags	= IORESOURCE_IRQ,
-	},
-	{
-		.start	= INT_GPIO_GROUP2,
-		.flags	= IORESOURCE_IRQ,
-	},
-};
-
-static struct platform_device msm_device_gpio = {
-	.name		= "msmgpio",
-	.id		= -1,
-	.resource	= gpio_resources,
-	.num_resources	= ARRAY_SIZE(gpio_resources),
-};
-
-static int __init msm7630_init_gpio(void)
-{
-	platform_device_register(&msm_device_gpio);
-	return 0;
-}
-
-postcore_initcall(msm7630_init_gpio);
