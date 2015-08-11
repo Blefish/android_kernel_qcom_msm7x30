@@ -10,16 +10,12 @@
  * GNU General Public License for more details.
  */
 
-#include <linux/module.h>
-#include <linux/init.h>
-#include <linux/kernel.h>
-#include <linux/errno.h>
 #include <linux/interrupt.h>
-#include <linux/platform_device.h>
-#include <linux/slab.h>
-#include <linux/mfd/pm8xxx/core.h>
 #include <linux/mfd/pm8xxx/vibrator.h>
-
+#include <linux/module.h>
+#include <linux/of.h>
+#include <linux/platform_device.h>
+#include <linux/regmap.h>
 #include "../staging/android/timed_output.h"
 
 #define VIB_DRV			0x4A
@@ -38,17 +34,20 @@ struct pm8xxx_vib {
 	spinlock_t lock;
 	struct work_struct work;
 	struct device *dev;
-	const struct pm8xxx_vibrator_platform_data *pdata;
+	struct regmap *regmap;
 	int state;
 	int level;
-	u8  reg_vib_drv;
+	unsigned int reg_vib_drv;
+	int initial_vibrate_ms;
+	int max_timeout_ms;
+	int level_mV;
 };
 
 static struct pm8xxx_vib *vib_dev;
 
 int pm8xxx_vibrator_config(struct pm8xxx_vib_config *vib_config)
 {
-	u8 reg = 0;
+	unsigned int reg = 0;
 	int rc;
 
 	if (vib_dev == NULL) {
@@ -65,12 +64,10 @@ int pm8xxx_vibrator_config(struct pm8xxx_vib_config *vib_config)
 	}
 
 	reg = (vib_config->drive_mV / 100) << VIB_DRV_SEL_SHIFT;
-
 	reg |= (!!vib_config->active_low) << VIB_DRV_LOGIC_SHIFT;
-
 	reg |= vib_config->enable_mode;
 
-	rc = pm8xxx_writeb(vib_dev->dev->parent, VIB_DRV, reg);
+	rc = regmap_write(vib_dev->regmap, VIB_DRV, reg);
 	if (rc)
 		pr_err("%s: pm8xxx write failed: rc=%d\n", __func__, rc);
 
@@ -96,34 +93,34 @@ static inline void __dump_vib_regs(struct pm8xxx_vib *vib, char *msg)
 #endif
 
 static int pm8xxx_vib_read_u8(struct pm8xxx_vib *vib,
-				 u8 *data, u16 reg)
+			      unsigned int *data, unsigned int reg)
 {
 	int rc;
 
-	rc = pm8xxx_readb(vib->dev->parent, reg, data);
+	rc = regmap_read(vib->regmap, reg, data);
 	if (rc < 0)
 		dev_warn(vib->dev, "Error reading pm8xxx: %X - ret %X\n",
-				reg, rc);
+			reg, rc);
 
 	return rc;
 }
 
 static int pm8xxx_vib_write_u8(struct pm8xxx_vib *vib,
-				 u8 data, u16 reg)
+			       unsigned int data, unsigned int reg)
 {
 	int rc;
 
-	rc = pm8xxx_writeb(vib->dev->parent, reg, data);
+	rc = regmap_write(vib->regmap, reg, data);
 	if (rc < 0)
 		dev_warn(vib->dev, "Error writing pm8xxx: %X - ret %X\n",
-				reg, rc);
+			reg, rc);
 	return rc;
 }
 
 static int pm8xxx_vib_set(struct pm8xxx_vib *vib, int on)
 {
 	int rc;
-	u8 val;
+	unsigned int val;
 
 	if (on) {
 		val = vib->reg_vib_drv;
@@ -147,8 +144,8 @@ static int pm8xxx_vib_set(struct pm8xxx_vib *vib, int on)
 
 static void pm8xxx_vib_enable(struct timed_output_dev *dev, int value)
 {
-	struct pm8xxx_vib *vib = container_of(dev, struct pm8xxx_vib,
-					 timed_dev);
+	struct pm8xxx_vib *vib =
+		container_of(dev, struct pm8xxx_vib, timed_dev);
 	unsigned long flags;
 
 retry:
@@ -162,12 +159,12 @@ retry:
 	if (value == 0)
 		vib->state = 0;
 	else {
-		value = (value > vib->pdata->max_timeout_ms ?
-				 vib->pdata->max_timeout_ms : value);
+		value = (value > vib->max_timeout_ms ?
+			vib->max_timeout_ms : value);
 		vib->state = 1;
 		hrtimer_start(&vib->vib_timer,
-			      ktime_set(value / 1000, (value % 1000) * 1000000),
-			      HRTIMER_MODE_REL);
+			ktime_set(value / 1000, (value % 1000) * 1000000),
+			HRTIMER_MODE_REL);
 	}
 	spin_unlock_irqrestore(&vib->lock, flags);
 	schedule_work(&vib->work);
@@ -175,16 +172,15 @@ retry:
 
 static void pm8xxx_vib_update(struct work_struct *work)
 {
-	struct pm8xxx_vib *vib = container_of(work, struct pm8xxx_vib,
-					 work);
+	struct pm8xxx_vib *vib = container_of(work, struct pm8xxx_vib, work);
 
 	pm8xxx_vib_set(vib, vib->state);
 }
 
 static int pm8xxx_vib_get_time(struct timed_output_dev *dev)
 {
-	struct pm8xxx_vib *vib = container_of(dev, struct pm8xxx_vib,
-							 timed_dev);
+	struct pm8xxx_vib *vib =
+		container_of(dev, struct pm8xxx_vib, timed_dev);
 
 	if (hrtimer_active(&vib->vib_timer)) {
 		ktime_t r = hrtimer_get_remaining(&vib->vib_timer);
@@ -195,8 +191,8 @@ static int pm8xxx_vib_get_time(struct timed_output_dev *dev)
 
 static enum hrtimer_restart pm8xxx_vib_timer_func(struct hrtimer *timer)
 {
-	struct pm8xxx_vib *vib = container_of(timer, struct pm8xxx_vib,
-							 vib_timer);
+	struct pm8xxx_vib *vib =
+		container_of(timer, struct pm8xxx_vib, vib_timer);
 
 	vib->state = 0;
 	schedule_work(&vib->work);
@@ -257,28 +253,50 @@ static DEVICE_ATTR(voltage_level, S_IRUGO | S_IWUSR,
 	voltage_level_show, voltage_level_store);
 
 static int pm8xxx_vib_probe(struct platform_device *pdev)
-
 {
-	const struct pm8xxx_vibrator_platform_data *pdata =
-						pdev->dev.platform_data;
+	struct device *dev = &pdev->dev;
+	struct device_node *node = dev->of_node;
 	struct pm8xxx_vib *vib;
-	u8 val;
+	unsigned int val;
 	int rc;
 
-	if (!pdata)
-		return -EINVAL;
-
-	if (pdata->level_mV < VIB_MIN_LEVEL_mV ||
-			 pdata->level_mV > VIB_MAX_LEVEL_mV)
-		return -EINVAL;
-
-	vib = kzalloc(sizeof(*vib), GFP_KERNEL);
+	vib = devm_kzalloc(dev, sizeof(*vib), GFP_KERNEL);
 	if (!vib)
 		return -ENOMEM;
 
-	vib->pdata	= pdata;
-	vib->level	= pdata->level_mV / 100;
-	vib->dev	= &pdev->dev;
+	vib->regmap = dev_get_regmap(dev->parent, NULL);
+	if (!vib->regmap) {
+		pr_err("Failed to get regmap\n");
+		return -ENODEV;
+	};
+
+	rc = of_property_read_u32(node, "initial-vibrate-ms",
+		&vib->initial_vibrate_ms);
+	if (rc) {
+		pr_err("%s: failed to read 'initial-vibrate-ms' "
+			"rc=%d\n", __func__, rc);
+		return rc;
+	}
+	rc = of_property_read_u32(node, "max-timeout-ms",
+		&vib->max_timeout_ms);
+	if (rc) {
+		pr_err("%s: failed to read 'max-timeout-ms' rc=%d\n",
+			__func__, rc);
+		return rc;
+	}
+	rc = of_property_read_u32(node, "level-mv", &vib->level_mV);
+	if (rc) {
+		pr_err("%s: failed to read 'level-mv' rc=%d\n",
+			__func__, rc);
+		return rc;
+	}
+
+	if (vib->level_mV < VIB_MIN_LEVEL_mV ||
+		vib->level_mV > VIB_MAX_LEVEL_mV)
+		return -EINVAL;
+
+	vib->level	= vib->level_mV / 100;
+	vib->dev	= dev;
 
 	spin_lock_init(&vib->lock);
 	INIT_WORK(&vib->work, pm8xxx_vib_update);
@@ -298,33 +316,29 @@ static int pm8xxx_vib_probe(struct platform_device *pdev)
 	 */
 	rc = pm8xxx_vib_read_u8(vib, &val, VIB_DRV);
 	if (rc < 0)
-		goto err_read_vib;
+		return rc;
 	val &= ~VIB_DRV_EN_MANUAL_MASK;
 	rc = pm8xxx_vib_write_u8(vib, val, VIB_DRV);
 	if (rc < 0)
-		goto err_read_vib;
+		return rc;
 
 	vib->reg_vib_drv = val;
 
 	rc = timed_output_dev_register(&vib->timed_dev);
 	if (rc < 0)
-		goto err_read_vib;
+		return rc;
 
 	rc = device_create_file(vib->timed_dev.dev, &dev_attr_voltage_level);
 	if (rc < 0)
 		pr_err("%s: create sysfs failed: voltage_level\n", __func__);
 
-	pm8xxx_vib_enable(&vib->timed_dev, pdata->initial_vibrate_ms);
+	pm8xxx_vib_enable(&vib->timed_dev, vib->initial_vibrate_ms);
 
 	platform_set_drvdata(pdev, vib);
 
 	vib_dev = vib;
 
 	return 0;
-
-err_read_vib:
-	kfree(vib);
-	return rc;
 }
 
 static int pm8xxx_vib_remove(struct platform_device *pdev)
@@ -336,11 +350,17 @@ static int pm8xxx_vib_remove(struct platform_device *pdev)
 	cancel_work_sync(&vib->work);
 	hrtimer_cancel(&vib->vib_timer);
 	timed_output_dev_unregister(&vib->timed_dev);
-	platform_set_drvdata(pdev, NULL);
-	kfree(vib);
 
 	return 0;
 }
+
+#ifdef CONFIG_OF
+static struct of_device_id pm8xxx_vib_of_match_table[] = {
+	{ .compatible = "qcom,pm8058-vibrator", },
+	{ /* end of table */ }
+};
+MODULE_DEVICE_TABLE(of, pm8xxx_vib_of_match_table);
+#endif
 
 static struct platform_driver pm8xxx_vib_driver = {
 	.probe		= pm8xxx_vib_probe,
@@ -348,23 +368,13 @@ static struct platform_driver pm8xxx_vib_driver = {
 	.driver		= {
 		.name	= PM8XXX_VIBRATOR_DEV_NAME,
 		.owner	= THIS_MODULE,
+		.of_match_table = of_match_ptr(pm8xxx_vib_of_match_table),
 #ifdef CONFIG_PM
 		.pm	= &pm8xxx_vib_pm_ops,
 #endif
 	},
 };
-
-static int __init pm8xxx_vib_init(void)
-{
-	return platform_driver_register(&pm8xxx_vib_driver);
-}
-module_init(pm8xxx_vib_init);
-
-static void __exit pm8xxx_vib_exit(void)
-{
-	platform_driver_unregister(&pm8xxx_vib_driver);
-}
-module_exit(pm8xxx_vib_exit);
+module_platform_driver(pm8xxx_vib_driver);
 
 MODULE_ALIAS("platform:" PM8XXX_VIBRATOR_DEV_NAME);
 MODULE_DESCRIPTION("pm8xxx vibrator driver");
