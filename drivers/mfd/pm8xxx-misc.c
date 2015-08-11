@@ -13,15 +13,24 @@
 
 #define pr_fmt(fmt) "%s: " fmt, __func__
 
-#include <linux/kernel.h>
-#include <linux/module.h>
-#include <linux/slab.h>
-#include <linux/spinlock.h>
-#include <linux/interrupt.h>
-#include <linux/platform_device.h>
 #include <linux/delay.h>
-#include <linux/mfd/pm8xxx/core.h>
+#include <linux/interrupt.h>
 #include <linux/mfd/pm8xxx/misc.h>
+#include <linux/module.h>
+#include <linux/of_device.h>
+#include <linux/regmap.h>
+
+enum pm8xxx_version {
+	PM8XXX_VERSION_8058,
+	PM8XXX_VERSION_8901,
+	PM8XXX_VERSION_8921,
+	PM8XXX_VERSION_8018,
+	PM8XXX_VERSION_8922,
+	PM8XXX_VERSION_8038,
+	PM8XXX_VERSION_8917,
+};
+
+#define PM8XXX_REVISION_8901_2p3		6
 
 /* PON CTRL 1 register */
 #define REG_PM8XXX_PON_CTRL_1			0x01C
@@ -153,31 +162,33 @@
 
 struct pm8xxx_misc_chip {
 	struct list_head			link;
-	struct pm8xxx_misc_platform_data	pdata;
-	struct device				*dev;
+	struct regmap				*regmap;
+	unsigned int				priority;
 	enum pm8xxx_version			version;
+	unsigned int				revision;
 	u64					osc_halt_count;
 };
 
 static LIST_HEAD(pm8xxx_misc_chips);
 static DEFINE_SPINLOCK(pm8xxx_misc_chips_lock);
 
-static int pm8xxx_misc_masked_write(struct pm8xxx_misc_chip *chip, u16 addr,
-				    u8 mask, u8 val)
+static int pm8xxx_misc_masked_write(struct pm8xxx_misc_chip *chip,
+				    unsigned int addr, unsigned int mask,
+				    unsigned int val)
 {
 	int rc;
-	u8 reg;
+	unsigned int reg;
 
-	rc = pm8xxx_readb(chip->dev->parent, addr, &reg);
+	rc = regmap_read(chip->regmap, addr, &reg);
 	if (rc) {
-		pr_err("pm8xxx_readb(0x%03X) failed, rc=%d\n", addr, rc);
+		pr_err("regmap_read(0x%03X) failed, rc=%d\n", addr, rc);
 		return rc;
 	}
 	reg &= ~mask;
 	reg |= val & mask;
-	rc = pm8xxx_writeb(chip->dev->parent, addr, reg);
+	rc = regmap_write(chip->regmap, addr, reg);
 	if (rc)
-		pr_err("pm8xxx_writeb(0x%03X)=0x%02X failed, rc=%d\n", addr,
+		pr_err("regmap_write(0x%03X)=0x%02X failed, rc=%d\n", addr,
 			reg, rc);
 	return rc;
 }
@@ -188,7 +199,7 @@ static int pm8xxx_misc_masked_write(struct pm8xxx_misc_chip *chip, u16 addr,
  * @value: Output parameter which gets the value of the register read.
  * RETURNS: an appropriate -ERRNO error value on error, or zero for success.
  */
-int pm8xxx_read_register(u16 addr, u8 *value)
+int pm8xxx_read_register(unsigned int addr, unsigned int *value)
 {
 	struct pm8xxx_misc_chip *chip;
 	unsigned long flags;
@@ -200,9 +211,9 @@ int pm8xxx_read_register(u16 addr, u8 *value)
 	list_for_each_entry(chip, &pm8xxx_misc_chips, link) {
 		switch (chip->version) {
 		case PM8XXX_VERSION_8921:
-			rc = pm8xxx_readb(chip->dev->parent, addr, value);
+			rc = regmap_read(chip->regmap, addr, value);
 			if (rc) {
-				pr_err("pm8xxx_readb(0x%03X) failed, rc=%d\n",
+				pr_err("regmap_read(0x%03X) failed, rc=%d\n",
 								addr, rc);
 				break;
 			}
@@ -225,24 +236,26 @@ EXPORT_SYMBOL_GPL(pm8xxx_read_register);
  */
 static int
 __pm8058_disable_smps_locally_set_pull_down(struct pm8xxx_misc_chip *chip,
-	u16 ctrl_addr, u16 test2_addr, u16 master_enable_addr,
-	u8 master_enable_bit)
+					    unsigned int ctrl_addr,
+					    unsigned int test2_addr,
+					    unsigned int master_enable_addr,
+					    unsigned int master_enable_bit)
 {
 	int rc = 0;
-	u8 vref_sel, vlow_sel, band, vprog, bank, reg;
+	unsigned int vref_sel, vlow_sel, band, vprog, bank, reg;
 
 	bank = PM8058_REGULATOR_BANK_SEL(7);
-	rc = pm8xxx_writeb(chip->dev->parent, test2_addr, bank);
+	rc = regmap_write(chip->regmap, test2_addr, bank);
 	if (rc) {
-		pr_err("%s: pm8xxx_writeb(0x%03X) failed: rc=%d\n", __func__,
+		pr_err("%s: regmap_write(0x%03X) failed: rc=%d\n", __func__,
 			test2_addr, rc);
 		goto done;
 	}
 
-	rc = pm8xxx_readb(chip->dev->parent, test2_addr, &reg);
+	rc = regmap_read(chip->regmap, test2_addr, &reg);
 	if (rc) {
-		pr_err("%s: FAIL pm8xxx_readb(0x%03X): rc=%d\n",
-		       __func__, test2_addr, rc);
+		pr_err("%s: FAIL regmap_read(0x%03X): rc=%d\n",
+			__func__, test2_addr, rc);
 		goto done;
 	}
 
@@ -250,10 +263,10 @@ __pm8058_disable_smps_locally_set_pull_down(struct pm8xxx_misc_chip *chip,
 	if ((reg & PM8058_SMPS_ADVANCED_MODE_MASK) ==
 					PM8058_SMPS_ADVANCED_MODE) {
 		/* Determine current output voltage. */
-		rc = pm8xxx_readb(chip->dev->parent, ctrl_addr, &reg);
+		rc = regmap_read(chip->regmap, ctrl_addr, &reg);
 		if (rc) {
-			pr_err("%s: FAIL pm8xxx_readb(0x%03X): rc=%d\n",
-			       __func__, ctrl_addr, rc);
+			pr_err("%s: FAIL regmap_read(0x%03X): rc=%d\n",
+				__func__, ctrl_addr, rc);
 			goto done;
 		}
 
@@ -284,10 +297,10 @@ __pm8058_disable_smps_locally_set_pull_down(struct pm8xxx_misc_chip *chip,
 
 		/* Set VLOW_SEL bit. */
 		bank = PM8058_REGULATOR_BANK_SEL(1);
-		rc = pm8xxx_writeb(chip->dev->parent, test2_addr, bank);
+		rc = regmap_write(chip->regmap, test2_addr, bank);
 		if (rc) {
-			pr_err("%s: FAIL pm8xxx_writeb(0x%03X): rc=%d\n",
-			       __func__, test2_addr, rc);
+			pr_err("%s: FAIL regmap_write(0x%03X): rc=%d\n",
+				__func__, test2_addr, rc);
 			goto done;
 		}
 
@@ -301,9 +314,9 @@ __pm8058_disable_smps_locally_set_pull_down(struct pm8xxx_misc_chip *chip,
 
 		/* Switch to legacy mode */
 		bank = PM8058_REGULATOR_BANK_SEL(7);
-		rc = pm8xxx_writeb(chip->dev->parent, test2_addr, bank);
+		rc = regmap_write(chip->regmap, test2_addr, bank);
 		if (rc) {
-			pr_err("%s: FAIL pm8xxx_writeb(0x%03X): rc=%d\n",
+			pr_err("%s: FAIL regmap_write(0x%03X): rc=%d\n",
 					__func__, test2_addr, rc);
 			goto done;
 		}
@@ -346,7 +359,9 @@ done:
 
 static int
 __pm8058_disable_ldo_locally_set_pull_down(struct pm8xxx_misc_chip *chip,
-		u16 ctrl_addr, u16 master_enable_addr, u8 master_enable_bit)
+					   unsigned int ctrl_addr,
+					   unsigned int master_enable_addr,
+					   unsigned int master_enable_bit)
 {
 	int rc;
 
@@ -371,8 +386,9 @@ static int __pm8018_reset_pwr_off(struct pm8xxx_misc_chip *chip, int reset)
 
 	/* Enable SMPL if resetting is desired. */
 	rc = pm8xxx_misc_masked_write(chip, REG_PM8018_SLEEP_CTRL,
-	       SLEEP_CTRL_SMPL_EN_MASK,
-	       (reset ? SLEEP_CTRL_SMPL_EN_RESET : SLEEP_CTRL_SMPL_EN_PWR_OFF));
+		SLEEP_CTRL_SMPL_EN_MASK,
+		(reset ? SLEEP_CTRL_SMPL_EN_RESET :
+			SLEEP_CTRL_SMPL_EN_PWR_OFF));
 	if (rc) {
 		pr_err("pm8xxx_misc_masked_write failed, rc=%d\n", rc);
 		return rc;
@@ -428,8 +444,9 @@ static int __pm8058_reset_pwr_off(struct pm8xxx_misc_chip *chip, int reset)
 
 	/* Enable SMPL if resetting is desired. */
 	rc = pm8xxx_misc_masked_write(chip, REG_PM8058_SLEEP_CTRL,
-	       SLEEP_CTRL_SMPL_EN_MASK,
-	       (reset ? SLEEP_CTRL_SMPL_EN_RESET : SLEEP_CTRL_SMPL_EN_PWR_OFF));
+		SLEEP_CTRL_SMPL_EN_MASK,
+		(reset ? SLEEP_CTRL_SMPL_EN_RESET :
+			SLEEP_CTRL_SMPL_EN_PWR_OFF));
 	if (rc) {
 		pr_err("pm8xxx_misc_masked_write failed, rc=%d\n", rc);
 		goto read_write_err;
@@ -457,7 +474,7 @@ read_write_err:
 static int __pm8901_reset_pwr_off(struct pm8xxx_misc_chip *chip, int reset)
 {
 	int rc = 0, i;
-	u8 pmr_addr[4] = {
+	unsigned int pmr_addr[4] = {
 		REG_PM8901_REGULATOR_S2_PMR,
 		REG_PM8901_REGULATOR_S3_PMR,
 		REG_PM8901_REGULATOR_S4_PMR,
@@ -490,8 +507,9 @@ static int __pm8921_reset_pwr_off(struct pm8xxx_misc_chip *chip, int reset)
 
 	/* Enable SMPL if resetting is desired. */
 	rc = pm8xxx_misc_masked_write(chip, REG_PM8921_SLEEP_CTRL,
-	       SLEEP_CTRL_SMPL_EN_MASK,
-	       (reset ? SLEEP_CTRL_SMPL_EN_RESET : SLEEP_CTRL_SMPL_EN_PWR_OFF));
+		SLEEP_CTRL_SMPL_EN_MASK,
+		(reset ? SLEEP_CTRL_SMPL_EN_RESET :
+			SLEEP_CTRL_SMPL_EN_PWR_OFF));
 	if (rc) {
 		pr_err("pm8xxx_misc_masked_write failed, rc=%d\n", rc);
 		goto read_write_err;
@@ -589,21 +607,21 @@ int pm8xxx_smpl_control(int enable)
 		case PM8XXX_VERSION_8018:
 			rc = pm8xxx_misc_masked_write(chip,
 				REG_PM8018_SLEEP_CTRL, SLEEP_CTRL_SMPL_EN_MASK,
-				(enable ? SLEEP_CTRL_SMPL_EN_RESET
-					   : SLEEP_CTRL_SMPL_EN_PWR_OFF));
+				(enable ? SLEEP_CTRL_SMPL_EN_RESET :
+					SLEEP_CTRL_SMPL_EN_PWR_OFF));
 			break;
 		case PM8XXX_VERSION_8058:
 			rc = pm8xxx_misc_masked_write(chip,
 				REG_PM8058_SLEEP_CTRL, SLEEP_CTRL_SMPL_EN_MASK,
-				(enable ? SLEEP_CTRL_SMPL_EN_RESET
-					   : SLEEP_CTRL_SMPL_EN_PWR_OFF));
+				(enable ? SLEEP_CTRL_SMPL_EN_RESET :
+					SLEEP_CTRL_SMPL_EN_PWR_OFF));
 			break;
 		case PM8XXX_VERSION_8921:
 		case PM8XXX_VERSION_8917:
 			rc = pm8xxx_misc_masked_write(chip,
 				REG_PM8921_SLEEP_CTRL, SLEEP_CTRL_SMPL_EN_MASK,
-				(enable ? SLEEP_CTRL_SMPL_EN_RESET
-					   : SLEEP_CTRL_SMPL_EN_PWR_OFF));
+				(enable ? SLEEP_CTRL_SMPL_EN_RESET :
+					SLEEP_CTRL_SMPL_EN_PWR_OFF));
 			break;
 		default:
 			/* PMIC doesn't have reset_pwr_off; do nothing. */
@@ -638,8 +656,8 @@ int pm8xxx_smpl_set_delay(enum pm8xxx_smpl_delay delay)
 	unsigned long flags;
 	int rc = 0;
 
-	if (delay < SLEEP_CTRL_SMPL_SEL_MIN
-	    || delay > SLEEP_CTRL_SMPL_SEL_MAX) {
+	if (delay < SLEEP_CTRL_SMPL_SEL_MIN ||
+		delay > SLEEP_CTRL_SMPL_SEL_MAX) {
 		pr_err("%s: invalid delay specified: %d\n", __func__, delay);
 		return -EINVAL;
 	}
@@ -651,19 +669,22 @@ int pm8xxx_smpl_set_delay(enum pm8xxx_smpl_delay delay)
 		switch (chip->version) {
 		case PM8XXX_VERSION_8018:
 			rc = pm8xxx_misc_masked_write(chip,
-				REG_PM8018_SLEEP_CTRL, SLEEP_CTRL_SMPL_SEL_MASK,
-				delay);
+						      REG_PM8018_SLEEP_CTRL,
+						      SLEEP_CTRL_SMPL_SEL_MASK,
+						      delay);
 			break;
 		case PM8XXX_VERSION_8058:
 			rc = pm8xxx_misc_masked_write(chip,
-				REG_PM8058_SLEEP_CTRL, SLEEP_CTRL_SMPL_SEL_MASK,
-				delay);
+						      REG_PM8058_SLEEP_CTRL,
+						      SLEEP_CTRL_SMPL_SEL_MASK,
+						      delay);
 			break;
 		case PM8XXX_VERSION_8921:
 		case PM8XXX_VERSION_8917:
 			rc = pm8xxx_misc_masked_write(chip,
-				REG_PM8921_SLEEP_CTRL, SLEEP_CTRL_SMPL_SEL_MASK,
-				delay);
+						      REG_PM8921_SLEEP_CTRL,
+						      SLEEP_CTRL_SMPL_SEL_MASK,
+						      delay);
 			break;
 		default:
 			/* PMIC doesn't have reset_pwr_off; do nothing. */
@@ -695,7 +716,7 @@ int pm8xxx_coincell_chg_config(struct pm8xxx_coincell_chg *chg_config)
 {
 	struct pm8xxx_misc_chip *chip;
 	unsigned long flags;
-	u8 reg = 0, voltage, resistor;
+	unsigned int reg = 0, voltage, resistor;
 	int rc = 0;
 
 	if (chg_config == NULL) {
@@ -707,7 +728,7 @@ int pm8xxx_coincell_chg_config(struct pm8xxx_coincell_chg *chg_config)
 	resistor = chg_config->resistor;
 
 	if (resistor < PM8XXX_COINCELL_RESISTOR_2100_OHMS ||
-			resistor > PM8XXX_COINCELL_RESISTOR_800_OHMS) {
+		resistor > PM8XXX_COINCELL_RESISTOR_800_OHMS) {
 		pr_err("Invalid resistor value provided\n");
 		return -EINVAL;
 	}
@@ -732,17 +753,17 @@ int pm8xxx_coincell_chg_config(struct pm8xxx_coincell_chg *chg_config)
 	list_for_each_entry(chip, &pm8xxx_misc_chips, link) {
 		switch (chip->version) {
 		case PM8XXX_VERSION_8018:
-			rc = pm8xxx_writeb(chip->dev->parent,
-					REG_PM8018_COIN_CHG, reg);
+			rc = regmap_write(chip->regmap,
+					  REG_PM8018_COIN_CHG, reg);
 			break;
 		case PM8XXX_VERSION_8058:
-			rc = pm8xxx_writeb(chip->dev->parent,
-					REG_PM8058_COIN_CHG, reg);
+			rc = regmap_write(chip->regmap,
+					  REG_PM8058_COIN_CHG, reg);
 			break;
 		case PM8XXX_VERSION_8921:
 		case PM8XXX_VERSION_8917:
-			rc = pm8xxx_writeb(chip->dev->parent,
-					REG_PM8921_COIN_CHG, reg);
+			rc = regmap_write(chip->regmap,
+					  REG_PM8921_COIN_CHG, reg);
 			break;
 		default:
 			/* PMIC doesn't have reset_pwr_off; do nothing. */
@@ -788,8 +809,8 @@ int pm8xxx_watchdog_reset_control(int enable)
 		case PM8XXX_VERSION_8917:
 			rc = pm8xxx_misc_masked_write(chip,
 				REG_PM8XXX_PON_CTRL_1, PON_CTRL_1_WD_EN_MASK,
-				(enable ? PON_CTRL_1_WD_EN_RESET
-					   : PON_CTRL_1_WD_EN_PWR_OFF));
+				(enable ? PON_CTRL_1_WD_EN_RESET :
+					PON_CTRL_1_WD_EN_PWR_OFF));
 			break;
 		default:
 			/* WD reset control not supported */
@@ -833,7 +854,7 @@ int pm8xxx_stay_on(void)
 		case PM8XXX_VERSION_8058:
 		case PM8XXX_VERSION_8921:
 		case PM8XXX_VERSION_8917:
-			rc = pm8xxx_writeb(chip->dev->parent,
+			rc = regmap_write(chip->regmap,
 				REG_PM8XXX_GP_TEST_1, PM8XXX_STAY_ON_CFG);
 			break;
 		default:
@@ -854,7 +875,9 @@ EXPORT_SYMBOL(pm8xxx_stay_on);
 
 static int
 __pm8xxx_hard_reset_config(struct pm8xxx_misc_chip *chip,
-		enum pm8xxx_pon_config config, u16 pon4_addr, u16 pon5_addr)
+			   enum pm8xxx_pon_config config,
+			   unsigned int pon4_addr,
+			   unsigned int pon5_addr)
 {
 	int rc = 0;
 
@@ -956,7 +979,7 @@ static irqreturn_t pm8xxx_osc_halt_isr(int irq, void *data)
 	}
 
 	pr_crit("%s: OSC_HALT interrupt has triggered, 32 kHz XTAL oscillator"
-				" has halted (%llu)!\n", __func__, count);
+		" has halted (%llu)!\n", __func__, count);
 
 	return IRQ_HANDLED;
 }
@@ -1031,7 +1054,7 @@ int pm8xxx_usb_id_pullup(int enable)
 
 			if (rc)
 				pr_err("Fail: reg=%x, rc=%d\n",
-				       REG_PM8XXX_GPIO_MUX_CTRL, rc);
+					REG_PM8XXX_GPIO_MUX_CTRL, rc);
 			break;
 		default:
 			/* Functionality not supported */
@@ -1050,16 +1073,16 @@ static int __pm8901_preload_dVdd(struct pm8xxx_misc_chip *chip)
 	int rc;
 
 	/* dVdd preloading is not needed for PMIC PM8901 rev 2.3 and beyond. */
-	if (pm8xxx_get_revision(chip->dev->parent) >= PM8XXX_REVISION_8901_2p3)
+	if (chip->revision >= PM8XXX_REVISION_8901_2p3)
 		return 0;
 
-	rc = pm8xxx_writeb(chip->dev->parent, 0x0BD, 0x0F);
+	rc = regmap_write(chip->regmap, 0x0BD, 0x0F);
 	if (rc)
-		pr_err("pm8xxx_writeb failed for 0x0BD, rc=%d\n", rc);
+		pr_err("regmap_write failed for 0x0BD, rc=%d\n", rc);
 
-	rc = pm8xxx_writeb(chip->dev->parent, 0x001, 0xB4);
+	rc = regmap_write(chip->regmap, 0x001, 0xB4);
 	if (rc)
-		pr_err("pm8xxx_writeb failed for 0x001, rc=%d\n", rc);
+		pr_err("regmap_write failed for 0x001, rc=%d\n", rc);
 
 	pr_info("dVdd preloaded\n");
 
@@ -1111,7 +1134,7 @@ int pm8xxx_aux_clk_control(enum pm8xxx_aux_clk_id clk_id,
 {
 	struct pm8xxx_misc_chip *chip;
 	unsigned long flags;
-	u8 clk_mask = 0, value = 0;
+	unsigned int clk_mask = 0, value = 0;
 
 	if (clk_id == CLK_MP3_1) {
 		clk_mask = MP3_1_MASK;
@@ -1154,7 +1177,7 @@ int pm8xxx_hsed_bias_control(enum pm8xxx_hsed_bias bias, bool enable)
 	struct pm8xxx_misc_chip *chip;
 	unsigned long flags;
 	int rc = 0;
-	u16 addr;
+	unsigned int addr;
 
 	switch (bias) {
 	case PM8XXX_HSED_BIAS0:
@@ -1195,40 +1218,75 @@ int pm8xxx_hsed_bias_control(enum pm8xxx_hsed_bias bias, bool enable)
 }
 EXPORT_SYMBOL(pm8xxx_hsed_bias_control);
 
+static struct of_device_id pm8xxx_misc_of_match_table[] = {
+	{ .compatible = "qcom,pm8018-misc",
+		.data = (void *)PM8XXX_VERSION_8018 },
+	{ .compatible = "qcom,pm8038-misc",
+		.data = (void *)PM8XXX_VERSION_8038 },
+	{ .compatible = "qcom,pm8058-misc",
+		.data = (void *)PM8XXX_VERSION_8058 },
+	{ .compatible = "qcom,pm8901-misc",
+		.data = (void *)PM8XXX_VERSION_8901 },
+	{ .compatible = "qcom,pm8917-misc",
+		.data = (void *)PM8XXX_VERSION_8917 },
+	{ .compatible = "qcom,pm8921-misc",
+		.data = (void *)PM8XXX_VERSION_8921 },
+	{ .compatible = "qcom,pm8922-misc",
+		.data = (void *)PM8XXX_VERSION_8922 },
+	{ /* end of table */ }
+};
+MODULE_DEVICE_TABLE(of, pm8xxx_misc_of_match_table);
+
 static int pm8xxx_misc_probe(struct platform_device *pdev)
 {
-	const struct pm8xxx_misc_platform_data *pdata = pdev->dev.platform_data;
+	struct device *dev = &pdev->dev;
+	struct device_node *node = dev->of_node;
 	struct pm8xxx_misc_chip *chip;
 	struct pm8xxx_misc_chip *sibling;
 	struct list_head *prev;
 	unsigned long flags;
 	int rc = 0, irq;
+	const struct of_device_id *match;
 
-	if (!pdata) {
-		pr_err("missing platform data\n");
-		return -EINVAL;
+	match = of_match_device(pm8xxx_misc_of_match_table, dev);
+	if (!match) {
+		pr_err("Failed to match device\n");
+		return -ENODEV;
 	}
 
-	chip = kzalloc(sizeof(struct pm8xxx_misc_chip), GFP_KERNEL);
+	chip = devm_kzalloc(dev, sizeof(struct pm8xxx_misc_chip), GFP_KERNEL);
 	if (!chip) {
-		pr_err("Cannot allocate %d bytes\n",
-			sizeof(struct pm8xxx_misc_chip));
+		pr_err("Cannot allocate memory\n");
 		return -ENOMEM;
 	}
 
-	chip->dev = &pdev->dev;
-	chip->version = pm8xxx_get_version(chip->dev->parent);
-	memcpy(&(chip->pdata), pdata, sizeof(struct pm8xxx_misc_platform_data));
+	chip->version = (enum pm8xxx_version)match->data;
+
+	chip->regmap = dev_get_regmap(dev->parent, NULL);
+	if (!chip->regmap) {
+		pr_err("Failed to get regmap\n");
+		return -ENODEV;
+	};
+
+	rc = of_property_read_u32(node, "priority", &chip->priority);
+	if (rc) {
+		pr_err("Cannot read 'priority' rc=%d\n", rc);
+		return rc;
+	}
+
+	rc = of_property_read_u32(node, "revision", &chip->revision);
+	if (rc)
+		chip->revision = 0;
 
 	irq = platform_get_irq_byname(pdev, "pm8xxx_osc_halt_irq");
 	if (irq > 0) {
-		rc = request_any_context_irq(irq, pm8xxx_osc_halt_isr,
-				 IRQF_TRIGGER_RISING | IRQF_DISABLED,
-				 "pm8xxx_osc_halt_irq", chip);
+		rc = devm_request_any_context_irq(dev, irq, pm8xxx_osc_halt_isr,
+					IRQF_TRIGGER_RISING | IRQF_DISABLED,
+					"pm8xxx_osc_halt_irq", chip);
 		if (rc < 0) {
 			pr_err("%s: request_any_context_irq(%d) FAIL: %d\n",
-							 __func__, irq, rc);
-			goto fail_irq;
+				__func__, irq, rc);
+			return rc;
 		}
 	}
 
@@ -1236,7 +1294,7 @@ static int pm8xxx_misc_probe(struct platform_device *pdev)
 	spin_lock_irqsave(&pm8xxx_misc_chips_lock, flags);
 	prev = &pm8xxx_misc_chips;
 	list_for_each_entry(sibling, &pm8xxx_misc_chips, link) {
-		if (chip->pdata.priority < sibling->pdata.priority)
+		if (chip->priority < sibling->priority)
 			break;
 		else
 			prev = &sibling->link;
@@ -1246,28 +1304,17 @@ static int pm8xxx_misc_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, chip);
 
-	return rc;
-
-fail_irq:
-	platform_set_drvdata(pdev, NULL);
-	kfree(chip);
-	return rc;
+	return 0;
 }
 
 static int pm8xxx_misc_remove(struct platform_device *pdev)
 {
 	struct pm8xxx_misc_chip *chip = platform_get_drvdata(pdev);
 	unsigned long flags;
-	int irq = platform_get_irq_byname(pdev, "pm8xxx_osc_halt_irq");
-	if (irq > 0)
-		free_irq(irq, chip);
 
 	spin_lock_irqsave(&pm8xxx_misc_chips_lock, flags);
 	list_del(&chip->link);
 	spin_unlock_irqrestore(&pm8xxx_misc_chips_lock, flags);
-
-	platform_set_drvdata(pdev, NULL);
-	kfree(chip);
 
 	return 0;
 }
@@ -1276,8 +1323,9 @@ static struct platform_driver pm8xxx_misc_driver = {
 	.probe	= pm8xxx_misc_probe,
 	.remove	= pm8xxx_misc_remove,
 	.driver	= {
-		.name	= PM8XXX_MISC_DEV_NAME,
-		.owner	= THIS_MODULE,
+		.name		= PM8XXX_MISC_DEV_NAME,
+		.owner		= THIS_MODULE,
+		.of_match_table	= pm8xxx_misc_of_match_table,
 	},
 };
 

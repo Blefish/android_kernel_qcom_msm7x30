@@ -18,16 +18,6 @@
 
 #define PM8XXX_MISC_DEV_NAME	"pm8xxx-misc"
 
-/**
- * struct pm8xxx_misc_platform_data - PM8xxx misc driver platform data
- * @priority:	PMIC prority level in a multi-PMIC system. Lower value means
- *		greater priority. Actions are performed from highest to lowest
- *		priority PMIC.
- */
-struct pm8xxx_misc_platform_data {
-	int	priority;
-};
-
 enum pm8xxx_uart_path_sel {
 	UART_NONE,
 	UART_TX1_RX1,
@@ -232,7 +222,7 @@ int pm8xxx_hsed_bias_control(enum pm8xxx_hsed_bias bias, bool enable);
  *
  * RETURNS: an appropriate -ERRNO error value on error, or zero for success.
  */
-int pm8xxx_read_register(u16 addr, u8 *value);
+int pm8xxx_read_register(unsigned int addr, unsigned int *value);
 
 #else
 
