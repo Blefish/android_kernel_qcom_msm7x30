@@ -405,7 +405,7 @@ static struct mfd_cell gpio_cell = {
 };
 
 #ifdef CONFIG_BOARD_SEMC_ZEUS
-static struct mfd_cell keypad_pmic_cell = {
+static struct mfd_cell keypad_pmic_cell __devinitdata = {
 	.name		= KP_NAME,
 	.id		= -1,
 };
