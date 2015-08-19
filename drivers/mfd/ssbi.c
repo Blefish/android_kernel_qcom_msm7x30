@@ -331,7 +331,18 @@ static struct platform_driver ssbi_driver = {
 		.of_match_table = ssbi_match_table,
 	},
 };
-module_platform_driver(ssbi_driver);
+
+static int __init ssbi_init(void)
+{
+	return platform_driver_register(&ssbi_driver);
+}
+postcore_initcall(ssbi_init);
+
+static void __exit ssbi_exit(void)
+{
+	platform_driver_unregister(&ssbi_driver);
+}
+module_exit(ssbi_exit)
 
 MODULE_LICENSE("GPL v2");
 MODULE_VERSION("1.0");
