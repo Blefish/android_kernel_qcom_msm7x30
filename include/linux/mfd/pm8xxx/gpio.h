@@ -23,15 +23,6 @@
 
 #define PM8XXX_GPIO_DEV_NAME	"pm8xxx-gpio"
 
-struct pm8xxx_gpio_core_data {
-	int	ngpios;
-};
-
-struct pm8xxx_gpio_platform_data {
-	struct pm8xxx_gpio_core_data	gpio_cdata;
-	int				gpio_base;
-};
-
 /* GPIO parameters */
 /* direction */
 #define	PM_GPIO_DIR_OUT			0x01
