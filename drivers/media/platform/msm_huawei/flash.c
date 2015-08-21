@@ -13,7 +13,6 @@
  */
 #include <linux/kernel.h>
 #include <linux/errno.h>
-#include <linux/leds-pmic8058.h>
 #include <linux/leds-pm8xxx.h>
 #include <linux/pwm.h>
 #include <linux/hrtimer.h>
@@ -388,47 +387,6 @@ static int msm_camera_flash_pm(
 	return 0;
 }
 
-int msm_camera_flash_pmic(
-	struct msm_camera_sensor_flash_pmic *pmic,
-	unsigned led_state)
-{
-	int rc = 0;
-
-	switch (led_state) {
-	case MSM_CAMERA_LED_OFF:
-		rc = pmic->pmic_set_current(pmic->led_src_1, 0);
-		if (pmic->num_of_src > 1)
-			rc = pmic->pmic_set_current(pmic->led_src_2, 0);
-		break;
-
-	case MSM_CAMERA_LED_LOW:
-		rc = pmic->pmic_set_current(pmic->led_src_1,
-				pmic->low_current);
-		if (pmic->num_of_src > 1)
-			rc = pmic->pmic_set_current(pmic->led_src_2, 0);
-		break;
-
-	case MSM_CAMERA_LED_HIGH:
-		rc = pmic->pmic_set_current(pmic->led_src_1,
-			pmic->high_current);
-		if (pmic->num_of_src > 1)
-			rc = pmic->pmic_set_current(pmic->led_src_2,
-				pmic->high_current);
-		break;
-
-	case MSM_CAMERA_LED_INIT:
-	case MSM_CAMERA_LED_RELEASE:
-		 break;
-
-	default:
-		rc = -EFAULT;
-		break;
-	}
-	CDBG("flash_set_led_state: return %d\n", rc);
-
-	return rc;
-}
-
 int32_t msm_camera_flash_set_led_state(
 	struct msm_camera_sensor_flash_data *fdata, unsigned led_state)
 {
@@ -439,11 +397,6 @@ int32_t msm_camera_flash_set_led_state(
 		return -ENODEV;
 
 	switch (fdata->flash_src->flash_sr_type) {
-	case MSM_CAMERA_FLASH_SRC_PMIC:
-		rc = msm_camera_flash_pmic(&fdata->flash_src->_fsrc.pmic_src,
-			led_state);
-		break;
-
 	case MSM_CAMERA_FLASH_SRC_PWM:
 		rc = msm_camera_flash_pwm(&fdata->flash_src->_fsrc.pwm_src,
 			led_state);

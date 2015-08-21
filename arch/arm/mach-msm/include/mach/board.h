@@ -25,7 +25,6 @@
 #ifdef CONFIG_BOARD_SEMC_ZEUS
 #include <linux/leds.h>
 #endif /* CONFIG_BOARD_SEMC_ZEUS */
-#include <linux/leds-pmic8058.h>
 #include <linux/leds-pm8xxx.h>
 #include <linux/clkdev.h>
 #include <linux/of_platform.h>
@@ -103,21 +102,11 @@ struct msm_camera_legacy_device_platform_data {
 #define MSM_CAMERA_FLASH_NONE 0
 #define MSM_CAMERA_FLASH_LED  1
 
-#define MSM_CAMERA_FLASH_SRC_PMIC (0x00000001<<0)
 #define MSM_CAMERA_FLASH_SRC_PWM  (0x00000001<<1)
 #define MSM_CAMERA_FLASH_SRC_CURRENT_DRIVER	(0x00000001<<2)
 #define MSM_CAMERA_FLASH_SRC_EXT     (0x00000001<<3)
 #define MSM_CAMERA_FLASH_SRC_LED (0x00000001<<3)
 #define MSM_CAMERA_FLASH_SRC_PM  (0x00000001<<4)
-
-struct msm_camera_sensor_flash_pmic {
-	uint8_t num_of_src;
-	uint32_t low_current;
-	uint32_t high_current;
-	enum pmic8058_leds led_src_1;
-	enum pmic8058_leds led_src_2;
-	int (*pmic_set_current)(enum pmic8058_leds id, unsigned mA);
-};
 
 struct msm_camera_sensor_flash_pwm {
 	uint32_t freq;
@@ -155,7 +144,6 @@ struct msm_camera_sensor_flash_src {
 	int flash_sr_type;
 
 	union {
-		struct msm_camera_sensor_flash_pmic pmic_src;
 		struct msm_camera_sensor_flash_pwm pwm_src;
 		struct msm_camera_sensor_flash_current_driver
 			current_driver_src;
