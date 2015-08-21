@@ -23,7 +23,6 @@
 #include <linux/wait.h>
 #include <linux/uaccess.h>
 #include <linux/msm_adc.h>
-#include <linux/pmic8058-xoadc.h>
 #include <linux/slab.h>
 #include <linux/semaphore.h>
 #include <linux/module.h>
@@ -101,8 +100,6 @@ static bool epm_fluid_enabled;
 
 /* Needed to support file_op interfaces */
 static struct msm_adc_drv *msm_adc_drv;
-
-static bool conv_first_request;
 
 static ssize_t msm_adc_show_curr(struct device *dev,
 				struct device_attribute *devattr, char *buf);
@@ -732,16 +729,6 @@ static int msm_adc_blocking_conversion(struct msm_adc_drv *msm_adc,
 	struct msm_adc_platform_data *pdata =
 					msm_adc_drv->pdev->dev.platform_data;
 	struct msm_adc_channels *channel = &pdata->channel[hwmon_chan];
-	int ret = 0;
-
-	if (conv_first_request) {
-		ret = pm8058_xoadc_calib_device(channel->adc_dev_instance);
-		if (ret) {
-			pr_err("pmic8058 xoadc calibration failed, retry\n");
-			return ret;
-		}
-		conv_first_request = false;
-	}
 
 	channel->adc_access_fn->adc_slot_request(channel->adc_dev_instance,
 									&slot);
@@ -829,16 +816,6 @@ int32_t adc_channel_request_conv(void *h, struct completion *conv_complete_evt)
 					msm_adc_drv->pdev->dev.platform_data;
 	struct msm_adc_channels *channel = &pdata->channel[client->adc_chan];
 	struct adc_conv_slot *slot;
-	int ret;
-
-	if (conv_first_request) {
-		ret = pm8058_xoadc_calib_device(channel->adc_dev_instance);
-		if (ret) {
-			pr_err("pmic8058 xoadc calibration failed, retry\n");
-			return ret;
-		}
-		conv_first_request = false;
-	}
 
 	channel->adc_access_fn->adc_slot_request(channel->adc_dev_instance,
 									&slot);
@@ -1452,7 +1429,6 @@ static int msm_adc_probe(struct platform_device *pdev)
 		else
 			msm_rpc_adc_init(pdev);
 	}
-	conv_first_request = true;
 
 	pr_info("msm_adc successfully registered\n");
 
