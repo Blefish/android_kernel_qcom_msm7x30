@@ -578,15 +578,6 @@ config PMIC8XXX_VIBRATOR_VOLTAGE
 	help
 	  Set the default voltage value in millivolts(mV).
 
-config PMIC8058_XOADC
-	tristate "Qualcomm PM8058 XOADC driver"
-	depends on PMIC8058
-	default n
-	help
-	  Enables User processor ADC reads over the XOADC module of Qualcomm's
-	  PMIC8058. Driver interface to program registers of the ADC over
-	  AMUX channels, devices on programmable MPP's and xotherm.
-
 config ANDROID_PMEM
 	bool "Android pmem allocator"
 	default y
