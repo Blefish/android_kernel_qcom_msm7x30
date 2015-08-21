@@ -142,7 +142,6 @@ obj-$(CONFIG_MFD_CS5535)	+= cs5535-mfd.o
 obj-$(CONFIG_MFD_OMAP_USB_HOST)	+= omap-usb-host.o omap-usb-tll.o
 obj-$(CONFIG_MFD_PM8921_CORE) 	+= pm8921-core.o ssbi.o
 obj-$(CONFIG_MFD_PM8XXX_BATT_ALARM)	+= pm8xxx-batt-alarm.o
-obj-$(CONFIG_MFD_PM8XXX_DEBUG)	+= pm8xxx-debug.o
 obj-$(CONFIG_MFD_PM8XXX_MISC)	+= pm8xxx-misc.o
 obj-$(CONFIG_MFD_PM8XXX_PWM)	+= pm8xxx-pwm.o
 obj-$(CONFIG_TPS65911_COMPARATOR)	+= tps65911-comparator.o
