@@ -28,6 +28,7 @@
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
+#include <linux/remote_spinlock.h>
 
 /* SSBI 2.0 controller registers */
 #define SSBI2_CMD			0x0008
@@ -75,6 +76,8 @@ struct ssbi {
 	struct device		*slave;
 	void __iomem		*base;
 	spinlock_t		lock;
+	bool			use_rlock;
+	remote_spinlock_t	rspin_lock;
 	enum ssbi_controller_type controller_type;
 	int (*read)(struct ssbi *, u16 addr, u8 *buf, int len);
 	int (*write)(struct ssbi *, u16 addr, const u8 *buf, int len);
@@ -247,9 +250,15 @@ int ssbi_read(struct device *dev, u16 addr, u8 *buf, int len)
 	unsigned long flags;
 	int ret;
 
-	spin_lock_irqsave(&ssbi->lock, flags);
-	ret = ssbi->read(ssbi, addr, buf, len);
-	spin_unlock_irqrestore(&ssbi->lock, flags);
+	if (ssbi->use_rlock) {
+		remote_spin_lock_irqsave(&ssbi->rspin_lock, flags);
+		ret = ssbi->read(ssbi, addr, buf, len);
+		remote_spin_unlock_irqrestore(&ssbi->rspin_lock, flags);
+	} else {
+		spin_lock_irqsave(&ssbi->lock, flags);
+		ret = ssbi->read(ssbi, addr, buf, len);
+		spin_unlock_irqrestore(&ssbi->lock, flags);
+	}
 
 	return ret;
 }
@@ -261,9 +270,15 @@ int ssbi_write(struct device *dev, u16 addr, const u8 *buf, int len)
 	unsigned long flags;
 	int ret;
 
-	spin_lock_irqsave(&ssbi->lock, flags);
-	ret = ssbi->write(ssbi, addr, buf, len);
-	spin_unlock_irqrestore(&ssbi->lock, flags);
+	if (ssbi->use_rlock) {
+		remote_spin_lock_irqsave(&ssbi->rspin_lock, flags);
+		ret = ssbi->write(ssbi, addr, buf, len);
+		remote_spin_unlock_irqrestore(&ssbi->rspin_lock, flags);
+	} else {
+		spin_lock_irqsave(&ssbi->lock, flags);
+		ret = ssbi->write(ssbi, addr, buf, len);
+		spin_unlock_irqrestore(&ssbi->lock, flags);
+	}
 
 	return ret;
 }
@@ -275,6 +290,7 @@ static int ssbi_probe(struct platform_device *pdev)
 	struct resource *mem_res;
 	struct ssbi *ssbi;
 	const char *type;
+	int ret;
 
 	ssbi = devm_kzalloc(&pdev->dev, sizeof(*ssbi), GFP_KERNEL);
 	if (!ssbi)
@@ -311,6 +327,13 @@ static int ssbi_probe(struct platform_device *pdev)
 		ssbi->read = ssbi_read_bytes;
 		ssbi->write = ssbi_write_bytes;
 	}
+
+	ret = remote_spin_lock_init(&ssbi->rspin_lock, "D:PMIC_SSBI");
+	if (ret) {
+		dev_err(&pdev->dev, "remote spinlock init failed\n");
+		return ret;
+	}
+	ssbi->use_rlock = 1;
 
 	spin_lock_init(&ssbi->lock);
 
