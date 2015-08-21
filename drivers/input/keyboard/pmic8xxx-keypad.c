@@ -22,6 +22,7 @@
 #include <linux/regmap.h>
 #include <linux/of.h>
 #include <linux/input/matrix_keypad.h>
+#include <linux/mfd/pm8xxx/gpio.h>
 
 #define PM8XXX_MAX_ROWS		18
 #define PM8XXX_MAX_COLS		8
@@ -455,6 +456,27 @@ static int pmic8xxx_kpd_init(struct pmic8xxx_kp *kp,
 
 }
 
+static int  pmic8xxx_kp_config_gpio(int gpio_start, int num_gpios,
+			struct pmic8xxx_kp *kp, struct pm_gpio *gpio_config)
+{
+	int	rc, i;
+
+	if (gpio_start < 0 || num_gpios < 0)
+		return -EINVAL;
+
+	for (i = 0; i < num_gpios; i++) {
+		rc = pm8xxx_gpio_config(gpio_start + i, gpio_config);
+		if (rc) {
+			dev_err(kp->dev, "%s: FAIL pm8xxx_gpio_config():"
+					"for PM GPIO [%d] rc=%d.\n",
+					__func__, gpio_start + i, rc);
+			return rc;
+		}
+	 }
+
+	return 0;
+}
+
 static int pmic8xxx_kp_enable(struct pmic8xxx_kp *kp)
 {
 	int rc;
@@ -513,6 +535,26 @@ static int pmic8xxx_kp_probe(struct platform_device *pdev)
 	struct pmic8xxx_kp *kp;
 	int rc;
 	unsigned int ctrl_val;
+
+	struct pm_gpio kypd_drv = {
+		.direction	= PM_GPIO_DIR_OUT,
+		.output_buffer	= PM_GPIO_OUT_BUF_OPEN_DRAIN,
+		.output_value	= 0,
+		.pull		= PM_GPIO_PULL_NO,
+		.vin_sel	= PM_GPIO_VIN_S4,
+		.out_strength	= PM_GPIO_STRENGTH_LOW,
+		.function	= PM_GPIO_FUNC_1,
+		.inv_int_pol	= 1,
+	};
+
+	struct pm_gpio kypd_sns = {
+		.direction	= PM_GPIO_DIR_IN,
+		.pull		= PM_GPIO_PULL_UP_31P5,
+		.vin_sel	= PM_GPIO_VIN_S4,
+		.out_strength	= PM_GPIO_STRENGTH_NO,
+		.function	= PM_GPIO_FUNC_NORMAL,
+		.inv_int_pol	= 1,
+	};
 
 	rc = matrix_keypad_parse_of_params(&pdev->dev, &rows, &cols);
 	if (rc)
@@ -593,6 +635,20 @@ static int pmic8xxx_kp_probe(struct platform_device *pdev)
 	rc = pmic8xxx_kpd_init(kp, pdev);
 	if (rc < 0) {
 		dev_err(&pdev->dev, "unable to initialize keypad controller\n");
+		return rc;
+	}
+
+	rc = pmic8xxx_kp_config_gpio(182,
+					cols, kp, &kypd_sns);
+	if (rc < 0) {
+		dev_err(&pdev->dev, "unable to configure keypad sense lines\n");
+		return rc;
+	}
+
+	rc = pmic8xxx_kp_config_gpio(190,
+					rows, kp, &kypd_drv);
+	if (rc < 0) {
+		dev_err(&pdev->dev, "unable to configure keypad drive lines\n");
 		return rc;
 	}
 
